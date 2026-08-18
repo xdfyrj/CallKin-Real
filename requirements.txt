@@ -1,0 +1,4 @@
+r2pipe>=1.9
+capstone>=5.0
+pyelftools>=0.31
+angr==9.2.165

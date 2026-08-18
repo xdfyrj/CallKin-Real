@@ -1,2 +1,82 @@
 # CallKin-Real
-CallKin Real-World Analysis Tool
+
+Stripped-only anonymous call-graph grouping for Rust ELF binaries.
+
+The analyzer does not read a non-stripped binary, source code, ground truth,
+symbol list, candidate list, or symbol-boundary file. It discovers functions
+from the stripped binary, resolves exact call evidence, asks angr about
+unresolved indirect calls, uses Oxidizer FLIRT to recognize `core`, `alloc`,
+`std`, and `__rustc` functions, then runs CG-WL with the fixed `out-in` mode.
+
+## One command
+
+```bash
+cd /mnt/c/Users/sumyr/playground/REV/CallKin-Real
+python3 callkin_real.py /path/to/stripped.bin
+```
+
+The result is written to:
+
+```text
+results/<binary-name>.callkin-real.json
+```
+
+To choose the output path:
+
+```bash
+python3 callkin_real.py /path/to/stripped.bin --output results/sample.json
+```
+
+Oxidizer is expected at:
+
+```text
+/mnt/c/Users/sumyr/playground/oxidizer
+```
+
+Prepare its locked environment once before the first run:
+
+```bash
+cd /mnt/c/Users/sumyr/playground/oxidizer
+uv sync --frozen --no-default-groups
+```
+
+Use `--oxidizer-dir` to override it. `--no-flirt` is only for dependency
+diagnostics; normal analysis runs FLIRT.
+
+## Output
+
+The central field is anonymous predicted grouping:
+
+```json
+"predicted_clusters": {
+  "C1": ["FUN_00123a40", "FUN_00123b10"],
+  "C2": ["FUN_00124000"]
+}
+```
+
+The JSON also records discovered function boundaries, exact and unresolved
+transfers, angr singleton/multiple/unresolvable/not-seen counts, FLIRT labels,
+abstentions, and CG-WL rounds. An address that is used by an exact transfer
+but has no discovered function boundary is retained as an `opaque` anchor;
+it is never presented as a fully identified function. It does not emit
+PR/RE/F1/ARI because those require an external evaluation ground truth.
+
+## Scope
+
+The current implementation targets x86-64 ELF. Function boundaries are
+discovered evidence, not truth. The graph uses direct calls, direct
+tail-calls, exact RIP-relative ELF relocations, and angr CFGFast singleton
+targets. Multiple-target and unresolved indirect calls remain in the JSON and
+do not become fake exact edges. A target address that is exact but outside
+the discovered boundary set becomes an address-only `opaque` anchor. Functions
+with no resolved non-self relation are reported as `abstain` and receive no
+WL color.
+
+The candidate scope is deliberately simple: direct FLIRT matches owned by
+`core`, `alloc`, `std`, or `__rustc`, plus imports, are context anchors; every
+other discovered function is a possible candidate. No non-stripped symbol or
+source oracle is read.
+
+The Oxidizer environment is intentionally separate from CallKin-Real's Python
+environment. Its direct FLIRT output is a library-context label, not a user
+function oracle and not ground truth.
