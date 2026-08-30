@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import collections
 import hashlib
+import importlib.metadata
 import os
 import json
 import logging
+import platform
 import re
 import shutil
 import subprocess
@@ -14,7 +16,9 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+
+from body_builder import body_quality_by_address, build_bodies
 
 
 ID_BIAS = 0x100000
@@ -60,16 +64,210 @@ def grouping_core(
         "root": root_id,
         "rounds": rounds,
         "predicted_clusters": clusters,
+        # An allowlist, not a denylist. A denylist leaks the internal `name`
+        # today and would leak any label field added later.
         "functions": [
             {
-                key: value for key, value in record.items()
-                if key not in {"flirt", "label_status"}
+                key: record[key]
+                for key in (
+                    "id", "address", "kind", "size", "boundary_source",
+                    "analysis_status", "grouping_role", "relation_status",
+                    "quality", "external_identity",
+                )
+                if key in record
             }
             for record in functions
         ],
         "edges": edges,
         "abstentions": abstentions,
     }
+
+
+STAGE_NAMES = ("discovery", "body", "universe", "relation")
+
+# Which earlier artifacts each stage was computed from. Recording the input
+# hashes is what makes a chain of artifacts checkable after the fact: a body
+# whose `inputs.discovery` does not match the discovery file beside it was
+# built from something else.
+STAGE_INPUTS: dict[str, tuple[str, ...]] = {
+    "discovery": (),
+    "body": ("discovery",),
+    "universe": ("discovery", "body"),
+    "relation": ("universe",),
+}
+
+
+def module_version(name: str) -> str | None:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        module = sys.modules.get(name)
+        return getattr(module, "__version__", None) if module else None
+
+
+def radare2_version() -> str | None:
+    executable = shutil.which("r2")
+    if executable is None:
+        return None
+    # On Windows the radare2 distribution puts a .BAT on PATH, and CreateProcess
+    # cannot run one directly. r2pipe handles this itself, so only this probe
+    # needs the interpreter.
+    command = (
+        ["cmd", "/c", executable, "-v"]
+        if executable.lower().endswith((".bat", ".cmd"))
+        else [executable, "-v"]
+    )
+    try:
+        completed = subprocess.run(
+            command, text=True, capture_output=True, timeout=30, check=False,
+            env={**os.environ, "TERM": "dumb"},
+        )
+    except Exception:
+        return None
+    lines = (completed.stdout or "").strip().splitlines()
+    return lines[0].strip() if lines else None
+
+
+def toolchain_fingerprint() -> dict[str, Any]:
+    """What produced these artifacts.
+
+    Discovery is not a function of the binary alone. radare2's `aaa` and angr's
+    CFGFast both change between versions, and the same binary has already
+    yielded different function counts on two machines. Without this recorded,
+    two artifacts that disagree cannot be told apart from two runs of different
+    toolchains, and neither can be reproduced.
+    """
+    return {
+        "python": platform.python_version(),
+        "capstone": module_version("capstone"),
+        "angr": module_version("angr"),
+        "r2pipe": module_version("r2pipe"),
+        "pefile": module_version("pefile"),
+        "radare2": radare2_version(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+    }
+
+
+def relation_edges(
+    edges: Mapping[int, Mapping[int, int]],
+    relation_status: Mapping[int, str],
+) -> list[dict[str, Any]]:
+    """Only the edges 1-WL actually saw.
+
+    Selecting by `grouping_role` instead would keep the edges of a function V1
+    groups but V0 abstained on -- a complete isolated function's self-edge, for
+    instance. Those edges were never read by the relation method, so recording
+    them in its artifact would misstate what the baseline was given.
+    """
+    visible = {
+        address for address, status in relation_status.items()
+        if status in {RELATION_MEMBER, RELATION_CONTEXT}
+    }
+    return [
+        {"source": function_id(source), "target": function_id(target), "count": count}
+        for source in sorted(edges)
+        if source in visible
+        for target, count in sorted(edges[source].items())
+        if target in visible
+    ]
+
+
+def stage_payloads(
+    *,
+    binary_sha256: str,
+    root_id: str | None,
+    functions: list[dict[str, Any]],
+    transfers: list[dict[str, Any]],
+    body_artifact: dict[str, Any],
+    edges: list[dict[str, Any]],
+    clusters: dict[str, list[str]],
+    rounds: int,
+    abstentions: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """The four label-free stage payloads.
+
+    Every one must be identical with and without FLIRT, because FLIRT runs
+    after all four. Splitting them says which stage broke rather than only that
+    one did.
+
+    Each is an allowlist over the same function records, for the reason
+    `grouping_core` is: a denylist leaks the internal `name` and would leak
+    whatever label field is added next.
+    """
+    def project(keys: tuple[str, ...]) -> list[dict[str, Any]]:
+        return [
+            {key: record[key] for key in keys if key in record}
+            for record in functions
+        ]
+
+    return {
+        "discovery": {
+            "binary_sha256": binary_sha256,
+            "root": root_id,
+            # Raw transfers, before the universe removes anything.
+            "transfers": transfers,
+            "functions": project((
+                "id", "address", "kind", "size", "boundary_source",
+                "external_identity",
+            )),
+        },
+        "body": body_artifact,
+        "universe": {
+            "functions": project(("id", "analysis_status", "grouping_role", "quality")),
+            "abstentions": abstentions,
+        },
+        "relation": {
+            "rounds": rounds,
+            "predicted_clusters": clusters,
+            # The projected graph 1-WL actually saw.
+            "edges": edges,
+            "functions": project(("id", "relation_status")),
+        },
+    }
+
+
+def artifact_envelope(
+    *,
+    stage: str,
+    binary_path: str,
+    binary_sha256: str,
+    inputs: dict[str, str],
+    toolchain: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": 3,
+        "artifact": f"callkin-real-{stage}",
+        "stage": stage,
+        "binary": {"path": binary_path, "sha256": binary_sha256},
+        "inputs": inputs,
+        "toolchain": toolchain,
+        "payload": payload,
+    }
+
+
+def tally(records: list[dict[str, Any]], key: str) -> dict[str, int]:
+    return dict(sorted(collections.Counter(record[key] for record in records).items()))
+
+
+def write_json(path: Path, value: Any) -> str:
+    """Write canonical UTF-8 with LF, and return the file's SHA-256.
+
+    Bytes, not `write_text`: on Windows text mode turns every newline into
+    CRLF, so the same run would hash differently on two platforms and the
+    artifact chain would be worthless for exactly the comparison it exists for.
+    """
+    encoded = (
+        json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(encoded)
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def stage_artifact_path(output: Path, stage: str) -> Path:
+    return output.parent / f"{output.stem}.{stage}.json"
 
 
 def sha256_file(path: Path) -> str:
@@ -288,7 +486,16 @@ class PeImage:
         rva = address - self.image_base
         if rva < 0:
             raise ValueError(f"cannot read PE bytes at 0x{address:x}+0x{size:x}")
-        data = self.pe.get_data(rva, size)
+        try:
+            data = self.pe.get_data(rva, size)
+        except Exception as exc:
+            # pefile signals an unmapped RVA with its own PEFormatError. The
+            # reader contract is a single ValueError for "not in the file", so
+            # the translation belongs here rather than in a broad except at the
+            # call site, where it could not be told apart from a real defect.
+            raise ValueError(
+                f"cannot read PE bytes at 0x{address:x}+0x{size:x}: {exc}"
+            ) from exc
         if len(data) != size:
             raise ValueError(f"cannot read PE bytes at 0x{address:x}+0x{size:x}")
         return data
@@ -745,23 +952,29 @@ ROLE_ABSTAIN = "abstain"
 
 def analysis_status_for(
     function: Function,
-    complete_bodies: set[int] | None = None,
+    body_quality: Mapping[int, Mapping[str, Any]],
 ) -> str:
     """Say how much of this function was recovered, and nothing else.
 
     Deliberately blind to owner, FLIRT and any name: those describe what the
     function *is*, not how much of it the tools read.
+
+    An internal function with no body record is an error rather than an
+    assumption. Guessing `complete` here is what made the earlier universe
+    unusable: it recorded functions as fully decoded that were never read.
     """
     if is_import(function):
         return ANALYSIS_EXTERNAL
     if function.kind == "opaque" or function.size <= 0:
         return ANALYSIS_ADDRESS_ONLY
-    if complete_bodies is None:
-        # Before body evidence exists, an internal function with a real extent
-        # is taken as complete. R3 replaces this with the decode result.
-        return ANALYSIS_COMPLETE
+    quality = body_quality.get(function.address)
+    if quality is None:
+        raise ValueError(
+            f"no body evidence for internal function {function.id} at "
+            f"0x{function.address:x}; decode it before building the universe"
+        )
     return (
-        ANALYSIS_COMPLETE if function.address in complete_bodies
+        ANALYSIS_COMPLETE if quality.get("complete_decode")
         else ANALYSIS_INCOMPLETE
     )
 
@@ -835,7 +1048,7 @@ def classify_nodes(
     functions: dict[int, Function],
     edges: dict[int, collections.Counter[int]],
     root: int | None,
-    complete_bodies: set[int] | None = None,
+    body_quality: Mapping[int, Mapping[str, Any]],
 ) -> tuple[dict[int, str], dict[int, str], list[dict[str, Any]], dict[int, str]]:
     """Assign every discovered function an analysis status and a grouping role.
 
@@ -854,7 +1067,7 @@ def classify_nodes(
 
     for address, function in functions.items():
         is_root = address == root
-        status = analysis_status_for(function, complete_bodies)
+        status = analysis_status_for(function, body_quality)
         statuses[address] = status
         role = grouping_role_for(status, is_root=is_root)
         roles[address] = role
@@ -869,22 +1082,54 @@ def classify_nodes(
                 "reason": "incomplete_body",
             })
             continue
-        # A member with no resolved edge still has a body, so it stays a member.
-        # The relation-only baseline is the thing that cannot judge it.
+
+    return roles, colors, abstentions, statuses
+
+
+# Relation status is a property of the V0 method, not of the universe. A member
+# with no resolved edge has nothing for the relation view to compare, but its
+# body is still there for V1, so it must not be dropped from the universe.
+RELATION_MEMBER = "relation-member"
+RELATION_ABSTAIN = "relation-abstain"
+RELATION_CONTEXT = "relation-context"
+
+
+def relation_statuses(
+    roles: Mapping[int, str],
+    edges: Mapping[int, collections.Counter[int]],
+) -> tuple[dict[int, str], list[dict[str, Any]]]:
+    """Project universe roles onto what the relation-only baseline can judge."""
+    incoming: dict[int, int] = collections.Counter()
+    for source, targets in edges.items():
+        for target, count in targets.items():
+            if source != target:
+                incoming[target] += count
+
+    statuses: dict[int, str] = {}
+    abstained: list[dict[str, Any]] = []
+    for address, role in roles.items():
+        if role == ROLE_CONTEXT_ONLY:
+            statuses[address] = RELATION_CONTEXT
+            continue
+        if role == ROLE_ABSTAIN:
+            statuses[address] = RELATION_ABSTAIN
+            continue
         out_degree = sum(
-            count for target, count in edges[address].items() if target != address
+            count for target, count in edges.get(address, {}).items()
+            if target != address
         )
-        if not out_degree and not incoming[address]:
-            abstentions.append({
-                "id": function.id,
+        if out_degree or incoming[address]:
+            statuses[address] = RELATION_MEMBER
+        else:
+            statuses[address] = RELATION_ABSTAIN
+            abstained.append({
+                "id": function_id(address),
                 "address": hex_address(address),
-                "analysis_status": status,
                 "grouping_role": ROLE_MEMBER,
                 "reason": "relation_abstain",
                 "note": "no resolved non-self IN or OUT edge; body evidence still applies",
             })
-
-    return roles, colors, abstentions, statuses
+    return statuses, abstained
 
 
 def wl_clusters(
@@ -896,8 +1141,8 @@ def wl_clusters(
 ) -> tuple[dict[str, list[str]], int, list[dict[str, Any]]]:
     # `member`/`context-only` is the schema-v2 vocabulary; `candidate`/`anchor`
     # is the R0 baseline's. Both are accepted so the baseline test still runs.
-    groupable = {ROLE_MEMBER, "candidate"}
-    fixed = {ROLE_CONTEXT_ONLY, "anchor"}
+    groupable = {RELATION_MEMBER, ROLE_MEMBER, "candidate"}
+    fixed = {RELATION_CONTEXT, ROLE_CONTEXT_ONLY, "anchor"}
     active = [address for address, status in statuses.items() if status in groupable | fixed]
     self_count = {address: edges[address].get(address, 0) for address in active}
     outgoing = {address: [(target, count) for target, count in edges[address].items() if target in active and target != address] for address in active}
@@ -1043,34 +1288,34 @@ def main(argv: list[str] | None = None) -> int:
         binary_sha256 = sha256_file(binary)
         functions, edges, transfer_json = make_graph(functions, transfers, image.entry)
         root = choose_root(image, functions)
-        # Roles first, with no label in scope. The FLIRT overlay comes after.
+        # Decode every internal extent first: role decisions must read the
+        # decode result, never assume it.
+        extents = {
+            address: (function.id, function.size)
+            for address, function in functions.items()
+            if not is_import(function) and function.kind != "opaque"
+        }
+        body_artifact = build_bodies(image, extents)
+        body_quality = body_quality_by_address(body_artifact)
+
+        # Roles second, with no label in scope. The FLIRT overlay comes after.
         roles, anchor_colors, abstentions, analysis_statuses = classify_nodes(
-            functions, edges, root
+            functions, edges, root, body_quality
         )
+        # Relation status is the V0 method's own projection of those roles.
+        relation_status, relation_abstained = relation_statuses(roles, edges)
+        abstentions = abstentions + relation_abstained
         clusters, rounds, traces = wl_clusters(
             functions,
             edges,
-            roles,
+            relation_status,
             anchor_colors,
             args.trace,
         )
         # Grouping is finished; only now may labels be attached.
         for address, function in functions.items():
             function.flirt = flirt.get(address)
-        active = {
-            address for address, role in roles.items()
-            if role in {ROLE_MEMBER, ROLE_CONTEXT_ONLY}
-        }
-        edge_json = []
-        for source in sorted(edges):
-            for target, count in sorted(edges[source].items()):
-                if source not in active or target not in active:
-                    continue
-                edge_json.append({
-                    "source": function_id(source),
-                    "target": function_id(target),
-                    "count": count,
-                })
+        edge_json = relation_edges(edges, relation_status)
         function_json = []
         for address in sorted(functions):
             function = functions[address]
@@ -1082,6 +1327,9 @@ def main(argv: list[str] | None = None) -> int:
                 "size": function.size or None,
                 "analysis_status": analysis_statuses.get(address, ANALYSIS_ADDRESS_ONLY),
                 "grouping_role": roles.get(address, ROLE_CONTEXT_ONLY),
+                "relation_status": relation_status.get(address, RELATION_CONTEXT),
+                "quality": body_quality.get(address),
+                "external_identity": function.name if is_import(function) else None,
                 "label_status": "direct" if function.flirt else "unknown",
                 "boundary_source": function.boundary_source,
                 "flirt": function.flirt,
@@ -1095,14 +1343,50 @@ def main(argv: list[str] | None = None) -> int:
             edges=edge_json,
             abstentions=abstentions,
         ))
+        output = Path(args.output) if args.output else Path("results") / f"{binary.name}.callkin-real.json"
+        toolchain = toolchain_fingerprint()
+        payloads = stage_payloads(
+            binary_sha256=binary_sha256,
+            root_id=function_id(root) if root is not None else None,
+            functions=function_json,
+            transfers=transfer_json,
+            body_artifact=body_artifact,
+            edges=edge_json,
+            clusters=clusters,
+            rounds=rounds,
+            abstentions=abstentions,
+        )
+        # One file per stage, written in dependency order so each records the
+        # hash of the artifact it was built from. `stage_sha256` is the hash of
+        # the file on disk, not of an object that was never saved.
+        stage_sha256: dict[str, str] = {}
+        artifacts: dict[str, dict[str, str]] = {}
+        for stage in STAGE_NAMES:
+            path = stage_artifact_path(output, stage)
+            digest = write_json(path, artifact_envelope(
+                stage=stage,
+                binary_path=str(binary),
+                binary_sha256=binary_sha256,
+                inputs={
+                    name: stage_sha256[name] for name in STAGE_INPUTS[stage]
+                },
+                toolchain=toolchain,
+                payload=payloads[stage],
+            ))
+            stage_sha256[stage] = digest
+            artifacts[stage] = {"path": path.name, "sha256": digest}
         format_discovery = (
             ["PE IAT", "PE base relocations", "PE .pdata"]
             if image.format.startswith("PE")
             else ["ELF relocations"]
         )
         result = {
-            "schema_version": 2,
+            "schema_version": 3,
             "tool": "CallKin-Real",
+            # The run record. The four stage payloads live in their own files,
+            # listed under `artifacts`; keeping a copy here too would let it
+            # drift from the file whose hash names it.
+            "artifact": "callkin-real-run",
             "analysis": {
                 "input": "stripped-only",
                 "relation_mode": RELATION_MODE,
@@ -1122,18 +1406,40 @@ def main(argv: list[str] | None = None) -> int:
                 "format": image.format,
                 "entry": hex_address(image.entry),
             },
+            "toolchain": toolchain,
             "root": {
                 "id": function_id(root) if root is not None else None,
                 "address": hex_address(root),
                 "source": image.root_source,
             },
+            "artifacts": artifacts,
+            "stage_sha256": stage_sha256,
             "grouping_core_sha256": core_sha256,
-            "predicted_clusters": clusters,
-            "rounds": rounds,
-            "functions": function_json,
-            "edges": edge_json,
-            "transfers": transfer_json,
-            "abstentions": abstentions,
+            "summary": {
+                "body": body_artifact["summary"],
+                "function_count": len(function_json),
+                "relation_edge_count": len(edge_json),
+                "transfer_count": len(transfer_json),
+                "cluster_count": len(clusters),
+                "rounds": rounds,
+                "analysis_status": tally(function_json, "analysis_status"),
+                "grouping_role": tally(function_json, "grouping_role"),
+                "relation_status": tally(function_json, "relation_status"),
+            },
+            # Labels are the one thing that may not appear in any stage file.
+            # They live here, joined back to stage output by id.
+            "labels": [
+                {
+                    "id": record["id"],
+                    "address": record["address"],
+                    "name": record["name"],
+                    "grouping_role": record["grouping_role"],
+                    "label_status": record["label_status"],
+                    "flirt": record["flirt"],
+                }
+                for record in function_json
+                if record["flirt"]
+            ],
             "indirect_call_summary": {
                 **indirect_summary,
             },
@@ -1149,19 +1455,21 @@ def main(argv: list[str] | None = None) -> int:
         }
         if args.trace:
             result["trace"] = traces
-        output = Path(args.output) if args.output else Path("results") / f"{binary.name}.callkin-real.json"
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        write_json(output, result)
         print(json.dumps({
             "output": str(output),
+            "artifacts": {name: item["path"] for name, item in artifacts.items()},
             "grouping_core_sha256": core_sha256,
+            "stage_sha256": stage_sha256,
             "cluster_count": len(clusters),
             "member_count": sum(role == ROLE_MEMBER for role in roles.values()),
             "context_only_count": sum(role == ROLE_CONTEXT_ONLY for role in roles.values()),
             "abstain_count": sum(role == ROLE_ABSTAIN for role in roles.values()),
             "relation_abstain_count": sum(
-                item.get("reason") == "relation_abstain" for item in abstentions
+                status == RELATION_ABSTAIN for status in relation_status.values()
             ),
+            "complete_body_count": body_artifact["summary"]["complete_count"],
+            "incomplete_body_count": body_artifact["summary"]["incomplete_count"],
             "direct_label_count": sum(1 for f in functions.values() if f.flirt),
         }, ensure_ascii=False))
         return 0

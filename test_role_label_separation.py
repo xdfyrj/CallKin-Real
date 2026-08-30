@@ -10,6 +10,7 @@ never from what it is called.
 from __future__ import annotations
 
 import collections
+import json
 
 from callkin_real import (
     ANALYSIS_ADDRESS_ONLY,
@@ -26,6 +27,13 @@ from callkin_real import (
     context_color_for,
     grouping_role_for,
     grouping_core,
+    relation_statuses,
+    stage_payloads,
+    relation_edges,
+    STAGE_NAMES,
+    RELATION_ABSTAIN,
+    RELATION_CONTEXT,
+    RELATION_MEMBER,
 )
 
 
@@ -49,6 +57,17 @@ def _opaque(address: int) -> Function:
     )
 
 
+def _quality(addresses, complete=True, reason=None, opaque=0):
+    return {
+        address: {
+            "complete_decode": complete,
+            "opaque_indirect_jump_count": opaque,
+            "failure_reason": reason,
+        }
+        for address in addresses
+    }
+
+
 def _edges(pairs) -> dict[int, collections.Counter]:
     edges: dict[int, collections.Counter] = collections.defaultdict(collections.Counter)
     for source, target in pairs:
@@ -60,7 +79,7 @@ def test_a_named_standard_library_function_is_still_a_member():
     # The whole point: direct FLIRT knowing this is core::ptr::drop_in_place
     # must not remove it from grouping. The role function never sees the name.
     drop_in_place = _internal(0x2000)
-    assert analysis_status_for(drop_in_place) == ANALYSIS_COMPLETE
+    assert analysis_status_for(drop_in_place, _quality([0x2000])) == ANALYSIS_COMPLETE
     assert grouping_role_for(ANALYSIS_COMPLETE, is_root=False) == ROLE_MEMBER
 
 
@@ -68,7 +87,8 @@ def test_the_same_function_gets_the_same_role_with_and_without_flirt():
     functions = {0x1000: _internal(0x1000), 0x2000: _internal(0x2000)}
     edges = _edges([(0x1000, 0x2000)])
 
-    without = classify_nodes(dict(functions), edges, root=None)
+    quality = _quality([0x1000, 0x2000])
+    without = classify_nodes(dict(functions), edges, None, quality)
 
     labelled = {address: _internal(address) for address in functions}
     labelled[0x2000].flirt = {
@@ -76,7 +96,7 @@ def test_the_same_function_gets_the_same_role_with_and_without_flirt():
         "canonical_origin": "core::ptr::drop_in_place",
         "owner": "core",
     }
-    with_flirt = classify_nodes(labelled, edges, root=None)
+    with_flirt = classify_nodes(labelled, edges, None, quality)
 
     roles_without, colors_without, abstentions_without, statuses_without = without
     roles_with, colors_with, abstentions_with, statuses_with = with_flirt
@@ -96,7 +116,9 @@ def test_root_import_and_address_only_are_context_only():
     }
     edges = _edges([(0x1000, 0x2000), (0x1000, 0x3000), (0x1000, 0x4000)])
 
-    roles, colors, _, statuses = classify_nodes(functions, edges, root=0x1000)
+    roles, colors, _, statuses = classify_nodes(
+        functions, edges, 0x1000, _quality([0x1000, 0x4000])
+    )
 
     assert roles[0x1000] == ROLE_CONTEXT_ONLY and colors[0x1000] == "root"
     assert statuses[0x2000] == ANALYSIS_EXTERNAL
@@ -112,9 +134,11 @@ def test_an_incomplete_internal_function_abstains():
     functions = {0x1000: _internal(0x1000), 0x2000: _internal(0x2000)}
     edges = _edges([(0x1000, 0x2000)])
 
-    roles, _, abstentions, statuses = classify_nodes(
-        functions, edges, root=None, complete_bodies={0x1000}
-    )
+    quality = {
+        **_quality([0x1000]),
+        **_quality([0x2000], complete=False, reason="decode_gap"),
+    }
+    roles, _, abstentions, statuses = classify_nodes(functions, edges, None, quality)
 
     assert statuses[0x2000] == ANALYSIS_INCOMPLETE
     assert roles[0x2000] == ROLE_ABSTAIN
@@ -126,15 +150,28 @@ def test_an_incomplete_internal_function_abstains():
 def test_a_complete_isolated_function_stays_a_member_and_is_relation_abstain():
     # V0 had no information about an edgeless function, so it abstained. V1 has
     # its body, so it is a member; only the relation-only baseline cannot judge.
-    functions = {0x1000: _internal(0x1000), 0x9000: _internal(0x9000)}
-    edges = _edges([(0x1000, 0x1000)])
+    # 0x1000 and 0x2000 call each other; 0x9000 has only a self-edge, which
+    # the relation view does not count.
+    functions = {
+        0x1000: _internal(0x1000),
+        0x2000: _internal(0x2000),
+        0x9000: _internal(0x9000),
+    }
+    edges = _edges([(0x1000, 0x2000), (0x9000, 0x9000)])
 
-    roles, _, abstentions, _ = classify_nodes(functions, edges, root=None)
+    roles, _, abstentions, _ = classify_nodes(
+        functions, edges, None, _quality([0x1000, 0x2000, 0x9000])
+    )
+    relation, relation_abstained = relation_statuses(roles, edges)
 
+    # Member in the universe, so V1 body retrieval still sees it.
     assert roles[0x9000] == ROLE_MEMBER
-    isolated = [item for item in abstentions if item["id"] == "FUN_00109000"]
+    assert not abstentions
+    # Excluded from the relation baseline, which has nothing to compare.
+    assert relation[0x9000] == RELATION_ABSTAIN
+    assert relation[0x1000] == RELATION_MEMBER
+    isolated = [item for item in relation_abstained if item["id"] == "FUN_00109000"]
     assert len(isolated) == 1
-    assert isolated[0]["reason"] == "relation_abstain"
     assert isolated[0]["grouping_role"] == ROLE_MEMBER
 
 
@@ -147,9 +184,11 @@ def test_no_discovered_function_is_silently_dropped():
     }
     edges = _edges([(0x1000, 0x2000)])
 
-    roles, _, _, statuses = classify_nodes(
-        functions, edges, root=0x1000, complete_bodies={0x1000}
-    )
+    quality = {
+        **_quality([0x1000]),
+        **_quality([0x4000], complete=False, reason="truncated_extent"),
+    }
+    roles, _, _, statuses = classify_nodes(functions, edges, 0x1000, quality)
 
     assert set(roles) == set(functions)
     assert set(statuses) == set(functions)
@@ -173,6 +212,32 @@ def test_a_context_colour_never_carries_a_label():
     assert context_color_for(labelled, is_root=True) == "root"
 
 
+def test_a_self_edge_on_a_relation_abstain_function_is_not_in_the_relation_artifact():
+    # 0x9000 is a complete isolated function: a grouping member, but 1-WL never
+    # analysed it. Selecting edges by grouping_role would keep its self-edge and
+    # misstate what the relation-only baseline was actually given.
+    functions = {
+        0x1000: _internal(0x1000),
+        0x2000: _internal(0x2000),
+        0x9000: _internal(0x9000),
+    }
+    edges = _edges([(0x1000, 0x2000), (0x9000, 0x9000)])
+
+    roles, _, _, _ = classify_nodes(
+        functions, edges, None, _quality([0x1000, 0x2000, 0x9000])
+    )
+    relation, _ = relation_statuses(roles, edges)
+    assert roles[0x9000] == ROLE_MEMBER
+    assert relation[0x9000] == RELATION_ABSTAIN
+
+    kept = relation_edges(edges, relation)
+    assert {"source": "FUN_00101000", "target": "FUN_00102000", "count": 1} in kept
+    assert not [
+        edge for edge in kept
+        if "FUN_00109000" in (edge["source"], edge["target"])
+    ], "an edge 1-WL never saw reached the relation artifact"
+
+
 def _function_records(labelled: bool) -> list[dict]:
     records = []
     for address in (0x1000, 0x2000):
@@ -184,6 +249,9 @@ def _function_records(labelled: bool) -> list[dict]:
             "size": 32,
             "analysis_status": ANALYSIS_COMPLETE,
             "grouping_role": ROLE_MEMBER,
+            "relation_status": RELATION_MEMBER,
+            "quality": {"complete_decode": True, "opaque_indirect_jump_count": 0,
+                        "failure_reason": None},
             "label_status": "direct" if labelled and address == 0x2000 else "unknown",
             "boundary_source": "radare2",
             "flirt": (
@@ -213,8 +281,8 @@ def test_the_grouping_core_hash_does_not_move_when_a_label_appears():
     # must produce the same grouping bytes whether or not FLIRT ran.
     without, with_flirt = _core(False), _core(True)
     assert canonical_sha256(without) == canonical_sha256(with_flirt)
-    assert "flirt" not in json_keys(without)
-    assert "label_status" not in json_keys(without)
+    for leaked in ("flirt", "label_status", "name"):
+        assert leaked not in json_keys(without), f"{leaked} reached the core"
 
 
 def json_keys(core: dict) -> set[str]:
@@ -222,6 +290,57 @@ def json_keys(core: dict) -> set[str]:
     for record in core["functions"]:
         keys |= set(record)
     return keys
+
+
+def _stages(labelled: bool) -> dict:
+    return stage_payloads(
+        binary_sha256="a" * 64,
+        root_id="FUN_00101000",
+        functions=_function_records(labelled),
+        transfers=[{"source": "0x1000", "target": "0x2000", "status": "resolved"}],
+        body_artifact={"schema_version": 2, "functions": [], "summary": {}},
+        edges=[{"source": "FUN_00101000", "target": "FUN_00102000", "count": 1}],
+        clusters={"C1": ["FUN_00102000"]},
+        rounds=2,
+        abstentions=[],
+    )
+
+
+def test_each_stage_hash_is_the_same_with_and_without_flirt():
+    # FLIRT runs after all four stages, so none of them may move when it does.
+    # Hashing them separately says which stage broke, not just that one did.
+    without, with_flirt = _stages(False), _stages(True)
+    assert set(without) == set(STAGE_NAMES)
+    for name in STAGE_NAMES:
+        assert canonical_sha256(without[name]) == canonical_sha256(with_flirt[name]), name
+
+
+def test_no_stage_carries_a_name_or_a_label():
+    stages = _stages(True)
+    for name in STAGE_NAMES:
+        text = json.dumps(stages[name])
+        for leaked in ("drop_in_place", "canonical_origin", "label_status",
+                       "\"name\"", "fcn."):
+            assert leaked not in text, f"{name} carries {leaked}"
+
+
+def test_a_stage_hash_moves_when_that_stage_moves():
+    baseline = {
+        name: canonical_sha256(payload) for name, payload in _stages(False).items()
+    }
+    moved = stage_payloads(
+        binary_sha256="a" * 64,
+        root_id="FUN_00101000",
+        functions=_function_records(False),
+        transfers=[{"source": "0x1000", "target": "0x2000", "status": "resolved"}],
+        body_artifact={"schema_version": 2, "functions": [], "summary": {}},
+        edges=[{"source": "FUN_00101000", "target": "FUN_00102000", "count": 1}],
+        clusters={"C1": ["FUN_00101000", "FUN_00102000"]},
+        rounds=2,
+        abstentions=[],
+    )
+    assert canonical_sha256(moved["relation"]) != baseline["relation"]
+    assert canonical_sha256(moved["discovery"]) == baseline["discovery"]
 
 
 def test_the_core_hash_still_moves_when_the_grouping_moves():
@@ -257,9 +376,13 @@ def main() -> int:
     test_root_import_and_address_only_are_context_only()
     test_an_incomplete_internal_function_abstains()
     test_a_complete_isolated_function_stays_a_member_and_is_relation_abstain()
+    test_a_self_edge_on_a_relation_abstain_function_is_not_in_the_relation_artifact()
     test_no_discovered_function_is_silently_dropped()
     test_a_context_colour_never_carries_a_label()
     test_the_grouping_core_hash_does_not_move_when_a_label_appears()
+    test_each_stage_hash_is_the_same_with_and_without_flirt()
+    test_no_stage_carries_a_name_or_a_label()
+    test_a_stage_hash_moves_when_that_stage_moves()
     test_the_core_hash_still_moves_when_the_grouping_moves()
     test_the_grouping_module_boundary_excludes_labels()
     print("CallKin-Real role/label separation: PASS")

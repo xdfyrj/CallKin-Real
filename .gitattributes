@@ -1,0 +1,4 @@
+# Artifact hashes are compared across Windows and WSL checkouts of this
+# same disk. A CRLF working tree makes the same run hash differently on
+# each, which is exactly the comparison the stage artifacts exist for.
+* text=auto eol=lf
