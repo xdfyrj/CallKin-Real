@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import collections
 import hashlib
+import os
 import json
 import logging
 import re
@@ -28,6 +29,47 @@ def function_id(address: int) -> str:
 
 def hex_address(address: int | None) -> str | None:
     return None if address is None else f"0x{address:x}"
+
+
+def canonical_sha256(value: Any) -> str:
+    """Hash a JSON value the same way regardless of key order or whitespace."""
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def grouping_core(
+    *,
+    binary_sha256: str,
+    root_id: str | None,
+    clusters: dict[str, list[str]],
+    rounds: int,
+    functions: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    abstentions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """The part of the result that must not depend on any label.
+
+    Function records are stripped of `flirt` and `label_status` here rather
+    than at the call site, so a caller cannot leak a label into the core by
+    forgetting to remove one.
+    """
+    return {
+        "binary_sha256": binary_sha256,
+        "root": root_id,
+        "rounds": rounds,
+        "predicted_clusters": clusters,
+        "functions": [
+            {
+                key: value for key, value in record.items()
+                if key not in {"flirt", "label_status"}
+            }
+            for record in functions
+        ],
+        "edges": edges,
+        "abstentions": abstentions,
+    }
 
 
 def sha256_file(path: Path) -> str:
@@ -275,7 +317,19 @@ def discover_radare2(binary: Path, image: Any) -> dict[int, Function]:
     except ImportError as exc:
         raise RuntimeError("install r2pipe to use radare2 discovery") from exc
 
-    r2 = r2pipe.open(str(binary), flags=["-2"])
+    # radare2 probes the terminal on startup and writes cursor-position escapes
+    # to stdout, which corrupts the first r2pipe JSON reply. Telling it there is
+    # no terminal is harmless where the escapes never appeared, and required on
+    # Windows.
+    previous_term = os.environ.get("TERM")
+    os.environ["TERM"] = "dumb"
+    try:
+        r2 = r2pipe.open(str(binary), flags=["-2"])
+    finally:
+        if previous_term is None:
+            os.environ.pop("TERM", None)
+        else:
+            os.environ["TERM"] = previous_term
     try:
         r2.cmd("aaa")
         rows = r2.cmdj("aflj") or []
@@ -651,6 +705,71 @@ def run_flirt(
     }
 
 
+# Analysis status: how much of the function's bytes the tools actually got.
+ANALYSIS_COMPLETE = "complete"
+ANALYSIS_INCOMPLETE = "incomplete"
+ANALYSIS_ADDRESS_ONLY = "address-only"
+ANALYSIS_EXTERNAL = "external"
+
+# Grouping role: whether the function can be a family candidate.
+ROLE_MEMBER = "member"
+ROLE_CONTEXT_ONLY = "context-only"
+ROLE_ABSTAIN = "abstain"
+
+
+def analysis_status_for(
+    function: Function,
+    complete_bodies: set[int] | None = None,
+) -> str:
+    """Say how much of this function was recovered, and nothing else.
+
+    Deliberately blind to owner, FLIRT and any name: those describe what the
+    function *is*, not how much of it the tools read.
+    """
+    if is_import(function):
+        return ANALYSIS_EXTERNAL
+    if function.kind == "opaque" or function.size <= 0:
+        return ANALYSIS_ADDRESS_ONLY
+    if complete_bodies is None:
+        # Before body evidence exists, an internal function with a real extent
+        # is taken as complete. R3 replaces this with the decode result.
+        return ANALYSIS_COMPLETE
+    return (
+        ANALYSIS_COMPLETE if function.address in complete_bodies
+        else ANALYSIS_INCOMPLETE
+    )
+
+
+def grouping_role_for(analysis_status: str, *, is_root: bool) -> str:
+    """Decide whether a function can be compared, from recovery alone.
+
+    A standard-library function that direct FLIRT already named is an internal
+    function like any other: if its body is complete it is a `member`. Names
+    never reach this decision.
+    """
+    if is_root:
+        return ROLE_CONTEXT_ONLY
+    if analysis_status in (ANALYSIS_EXTERNAL, ANALYSIS_ADDRESS_ONLY):
+        return ROLE_CONTEXT_ONLY
+    if analysis_status == ANALYSIS_INCOMPLETE:
+        return ROLE_ABSTAIN
+    return ROLE_MEMBER
+
+
+def context_color_for(function: Function, *, is_root: bool) -> str:
+    """Fixed colour for a context-only node.
+
+    Only what the binary itself carries: the root marker, the import identity
+    left in the image, and the address of a target with no body. A FLIRT name
+    would make the relation depend on labels.
+    """
+    if is_root:
+        return "root"
+    if is_import(function):
+        return f"import:{function.name}"
+    return f"opaque:{function.address:x}"
+
+
 def owner_from_name(name: str) -> str | None:
     match = re.search(r"(?:^|<)(core|alloc|std|__rustc)::", name)
     return match.group(1) if match else None
@@ -690,8 +809,14 @@ def classify_nodes(
     functions: dict[int, Function],
     edges: dict[int, collections.Counter[int]],
     root: int | None,
-    flirt: dict[int, dict[str, str]],
-) -> tuple[dict[int, str], dict[int, str], list[dict[str, Any]]]:
+    complete_bodies: set[int] | None = None,
+) -> tuple[dict[int, str], dict[int, str], list[dict[str, Any]], dict[int, str]]:
+    """Assign every discovered function an analysis status and a grouping role.
+
+    No FLIRT label, owner or name reaches this function. Running with and
+    without FLIRT must produce identical roles, colours and abstentions.
+    """
+    roles: dict[int, str] = {}
     statuses: dict[int, str] = {}
     colors: dict[int, str] = {}
     abstentions: list[dict[str, Any]] = []
@@ -702,34 +827,38 @@ def classify_nodes(
                 incoming[target] += count
 
     for address, function in functions.items():
-        function.flirt = flirt.get(address)
-        owner = owner_from_name(function.flirt.get("name", "")) if function.flirt else None
-        known_library = owner in STANDARD_OWNERS or is_import(function)
-        out_degree = sum(count for target, count in edges[address].items() if target != address)
-        in_degree = incoming[address]
-        if address == root:
-            statuses[address] = "anchor"
-            colors[address] = "root"
-        elif known_library or function.kind == "opaque":
-            statuses[address] = "anchor"
-            if function.kind == "opaque":
-                colors[address] = f"opaque:{address:x}"
-            elif function.flirt:
-                colors[address] = f"flirt:{function.flirt.get('canonical_origin', function.flirt.get('name', 'unknown'))}"
-            else:
-                colors[address] = f"import:{function.name}"
-        elif out_degree or in_degree:
-            statuses[address] = "candidate"
-        else:
-            statuses[address] = "abstain"
+        is_root = address == root
+        status = analysis_status_for(function, complete_bodies)
+        statuses[address] = status
+        role = grouping_role_for(status, is_root=is_root)
+        roles[address] = role
+        if role == ROLE_CONTEXT_ONLY:
+            colors[address] = context_color_for(function, is_root=is_root)
+            continue
+        if role == ROLE_ABSTAIN:
             abstentions.append({
                 "id": function.id,
                 "address": hex_address(address),
-                "reason": "no_resolved_nonself_in_or_out_edge",
-                "flirt_label": function.flirt,
+                "analysis_status": status,
+                "reason": "incomplete_body",
+            })
+            continue
+        # A member with no resolved edge still has a body, so it stays a member.
+        # The relation-only baseline is the thing that cannot judge it.
+        out_degree = sum(
+            count for target, count in edges[address].items() if target != address
+        )
+        if not out_degree and not incoming[address]:
+            abstentions.append({
+                "id": function.id,
+                "address": hex_address(address),
+                "analysis_status": status,
+                "grouping_role": ROLE_MEMBER,
+                "reason": "relation_abstain",
+                "note": "no resolved non-self IN or OUT edge; body evidence still applies",
             })
 
-    return statuses, colors, abstentions
+    return roles, colors, abstentions, statuses
 
 
 def wl_clusters(
@@ -739,7 +868,11 @@ def wl_clusters(
     anchor_colors: dict[int, str],
     trace: bool,
 ) -> tuple[dict[str, list[str]], int, list[dict[str, Any]]]:
-    active = [address for address, status in statuses.items() if status in {"candidate", "anchor"}]
+    # `member`/`context-only` is the schema-v2 vocabulary; `candidate`/`anchor`
+    # is the R0 baseline's. Both are accepted so the baseline test still runs.
+    groupable = {ROLE_MEMBER, "candidate"}
+    fixed = {ROLE_CONTEXT_ONLY, "anchor"}
+    active = [address for address, status in statuses.items() if status in groupable | fixed]
     self_count = {address: edges[address].get(address, 0) for address in active}
     outgoing = {address: [(target, count) for target, count in edges[address].items() if target in active and target != address] for address in active}
     incoming: dict[int, list[tuple[int, int]]] = {address: [] for address in active}
@@ -749,7 +882,7 @@ def wl_clusters(
 
     colors: dict[int, str] = {}
     for address in active:
-        if statuses[address] == "anchor":
+        if statuses[address] in fixed:
             colors[address] = f"ANCHOR:{anchor_colors.get(address, f'address:{address:x}')}"
         else:
             colors[address] = f"USER:self={self_count[address]}:distinct_out={len(outgoing[address])}"
@@ -759,7 +892,7 @@ def wl_clusters(
     def candidate_partition(current: dict[int, str]) -> dict[str, list[str]]:
         grouped: dict[str, list[str]] = collections.defaultdict(list)
         for address in active:
-            if statuses[address] == "candidate":
+            if statuses[address] in groupable:
                 grouped[current[address]].append(functions[address].id)
         clusters = sorted((sorted(values) for values in grouped.values()), key=lambda values: (values[0], len(values)))
         return {f"C{index}": members for index, members in enumerate(clusters, 1)}
@@ -881,17 +1014,27 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.flirt_probe),
                 args.flirt_timeout,
             )
+        binary_sha256 = sha256_file(binary)
         functions, edges, transfer_json = make_graph(functions, transfers, image.entry)
         root = choose_root(image, functions)
-        statuses, anchor_colors, abstentions = classify_nodes(functions, edges, root, flirt)
+        # Roles first, with no label in scope. The FLIRT overlay comes after.
+        roles, anchor_colors, abstentions, analysis_statuses = classify_nodes(
+            functions, edges, root
+        )
         clusters, rounds, traces = wl_clusters(
             functions,
             edges,
-            statuses,
+            roles,
             anchor_colors,
             args.trace,
         )
-        active = {address for address, status in statuses.items() if status in {"candidate", "anchor"}}
+        # Grouping is finished; only now may labels be attached.
+        for address, function in functions.items():
+            function.flirt = flirt.get(address)
+        active = {
+            address for address, role in roles.items()
+            if role in {ROLE_MEMBER, ROLE_CONTEXT_ONLY}
+        }
         edge_json = []
         for source in sorted(edges):
             for target, count in sorted(edges[source].items()):
@@ -911,22 +1054,33 @@ def main(argv: list[str] | None = None) -> int:
                 "name": function.name,
                 "kind": function.kind,
                 "size": function.size or None,
-                "status": statuses.get(address, "opaque"),
+                "analysis_status": analysis_statuses.get(address, ANALYSIS_ADDRESS_ONLY),
+                "grouping_role": roles.get(address, ROLE_CONTEXT_ONLY),
+                "label_status": "direct" if function.flirt else "unknown",
                 "boundary_source": function.boundary_source,
                 "flirt": function.flirt,
             })
+        core_sha256 = canonical_sha256(grouping_core(
+            binary_sha256=binary_sha256,
+            root_id=function_id(root) if root is not None else None,
+            clusters=clusters,
+            rounds=rounds,
+            functions=function_json,
+            edges=edge_json,
+            abstentions=abstentions,
+        ))
         format_discovery = (
             ["PE IAT", "PE base relocations", "PE .pdata"]
             if image.format.startswith("PE")
             else ["ELF relocations"]
         )
         result = {
-            "schema_version": 1,
+            "schema_version": 2,
             "tool": "CallKin-Real",
             "analysis": {
                 "input": "stripped-only",
                 "relation_mode": RELATION_MODE,
-                "candidate_rule": "all discovered non-library functions with a resolved non-self IN or OUT edge",
+                "grouping_role_rule": "internal function with a complete body is a member, whatever its owner or FLIRT label; root, import and address-only targets are context-only; incomplete internal functions abstain",
                 "edge_rule": "exact direct, format-specific relocation/IAT, and angr singleton targets; address-only targets become opaque anchors",
                 "discovery": [
                     "radare2",
@@ -938,7 +1092,7 @@ def main(argv: list[str] | None = None) -> int:
             },
             "binary": {
                 "path": str(binary),
-                "sha256": sha256_file(binary),
+                "sha256": binary_sha256,
                 "format": image.format,
                 "entry": hex_address(image.entry),
             },
@@ -947,6 +1101,7 @@ def main(argv: list[str] | None = None) -> int:
                 "address": hex_address(root),
                 "source": image.root_source,
             },
+            "grouping_core_sha256": core_sha256,
             "predicted_clusters": clusters,
             "rounds": rounds,
             "functions": function_json,
@@ -973,9 +1128,15 @@ def main(argv: list[str] | None = None) -> int:
         output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print(json.dumps({
             "output": str(output),
+            "grouping_core_sha256": core_sha256,
             "cluster_count": len(clusters),
-            "candidate_count": sum(status == "candidate" for status in statuses.values()),
-            "abstain_count": len(abstentions),
+            "member_count": sum(role == ROLE_MEMBER for role in roles.values()),
+            "context_only_count": sum(role == ROLE_CONTEXT_ONLY for role in roles.values()),
+            "abstain_count": sum(role == ROLE_ABSTAIN for role in roles.values()),
+            "relation_abstain_count": sum(
+                item.get("reason") == "relation_abstain" for item in abstentions
+            ),
+            "direct_label_count": sum(1 for f in functions.values() if f.flirt),
         }, ensure_ascii=False))
         return 0
     except Exception as exc:
