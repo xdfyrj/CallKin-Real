@@ -12,8 +12,9 @@ probe is replaced with a stub that labels every third function, which is a
 harder test than a real run: it guarantees labels exist.
 
 It also checks the artifact chain itself: every stage file must hash to what
-the run record says, name the hash of the artifact it was built from, and be
-written with LF so the same run hashes the same on Windows and Linux.
+the run record says, name the hash of the artifact it was built from, be
+written with LF so the same run hashes the same on Windows and Linux, and be
+independent of where it was written.
 
 Set CALLKIN_REAL_TEST_BINARY to a stripped x86-64 binary to run it. Needs
 radare2 on PATH.
@@ -85,7 +86,13 @@ def _check_chain(run: dict, output: Path) -> None:
         assert run["stage_sha256"][stage] == on_disk, f"{stage} hash is not the file"
         assert run["artifacts"][stage]["sha256"] == on_disk, stage
         assert stages[stage]["binary"]["sha256"] == run["binary"]["sha256"], stage
-        assert stages[stage]["toolchain"] == run["toolchain"], stage
+        # The absolute path and the toolchain belong to the run, not to the
+        # result. In a stage file they would make the same grouping hash
+        # differently on two machines, which is the comparison these hashes
+        # are for.
+        assert "path" not in stages[stage]["binary"], stage
+        assert "toolchain" not in stages[stage], stage
+        assert str(run["binary"]["path"]) not in json.dumps(stages[stage]), stage
         for name, digest in stages[stage]["inputs"].items():
             assert digest == run["stage_sha256"][name], f"{stage} names a stale {name}"
         assert 13 not in path.read_bytes(), f"{stage} was written with CRLF"
@@ -130,6 +137,17 @@ def main() -> int:
             text = json.dumps(payload)
             for leaked in ("drop_in_place", "canonical_origin", "label_status"):
                 assert leaked not in text, f"{stage} carries {leaked}"
+
+        # Same binary, different output directory: the stage files must be
+        # byte-identical. Only run.json may differ, since it records the path.
+        elsewhere = room / "nested" / "deeper" / "same.json"
+        moved_run = _run(binary, elsewhere, flirt=False)
+        _check_chain(moved_run, elsewhere)
+        for stage in STAGE_KEYS:
+            assert without["stage_sha256"][stage] == moved_run["stage_sha256"][stage], (
+                f"{stage} depends on where it was written"
+            )
+        assert moved_run["binary"]["path"] == without["binary"]["path"]
 
     # The labels really did reach functions grouping kept as members, which is
     # the case the frozen V1 could not express.

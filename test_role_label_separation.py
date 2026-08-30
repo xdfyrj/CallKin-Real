@@ -29,6 +29,7 @@ from callkin_real import (
     grouping_core,
     relation_statuses,
     stage_payloads,
+    artifact_envelope,
     relation_edges,
     STAGE_NAMES,
     RELATION_ABSTAIN,
@@ -343,6 +344,42 @@ def test_a_stage_hash_moves_when_that_stage_moves():
     assert canonical_sha256(moved["discovery"]) == baseline["discovery"]
 
 
+def test_a_stage_artifact_does_not_depend_on_the_path_or_the_toolchain():
+    # Two runs of different toolchains that reach the same grouping must write
+    # byte-identical stage files. If they did not, no cross-machine comparison
+    # could tell "the answer changed" from "the machine changed".
+    payload = _stages(False)["universe"]
+    envelope = artifact_envelope(
+        stage="universe",
+        binary_sha256="a" * 64,
+        inputs={"discovery": "b" * 64, "body": "c" * 64},
+        payload=payload,
+    )
+    text = json.dumps(envelope)
+    for leaked in ("path", "toolchain", "python", "angr", "radare2", "platform"):
+        assert leaked not in text, f"the envelope carries {leaked}"
+    assert canonical_sha256(envelope) == canonical_sha256(artifact_envelope(
+        stage="universe",
+        binary_sha256="a" * 64,
+        inputs={"discovery": "b" * 64, "body": "c" * 64},
+        payload=payload,
+    ))
+
+
+def test_a_stage_artifact_still_moves_when_the_payload_moves():
+    def envelope(labelled_payload):
+        return artifact_envelope(
+            stage="relation",
+            binary_sha256="a" * 64,
+            inputs={"universe": "d" * 64},
+            payload=labelled_payload,
+        )
+
+    baseline = _stages(False)["relation"]
+    moved = {**baseline, "rounds": baseline["rounds"] + 1}
+    assert canonical_sha256(envelope(baseline)) != canonical_sha256(envelope(moved))
+
+
 def test_the_core_hash_still_moves_when_the_grouping_moves():
     baseline = canonical_sha256(_core(False))
     moved = grouping_core(
@@ -383,6 +420,8 @@ def main() -> int:
     test_each_stage_hash_is_the_same_with_and_without_flirt()
     test_no_stage_carries_a_name_or_a_label()
     test_a_stage_hash_moves_when_that_stage_moves()
+    test_a_stage_artifact_does_not_depend_on_the_path_or_the_toolchain()
+    test_a_stage_artifact_still_moves_when_the_payload_moves()
     test_the_core_hash_still_moves_when_the_grouping_moves()
     test_the_grouping_module_boundary_excludes_labels()
     print("CallKin-Real role/label separation: PASS")

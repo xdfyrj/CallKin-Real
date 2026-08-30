@@ -204,29 +204,54 @@ def test_any_other_reader_exception_propagates():
         raise AssertionError("a reader defect was recorded as a decode failure")
 
 
-def test_the_pe_reader_reports_an_unmapped_rva_as_a_value_error():
-    # pefile raises its own PEFormatError; PeImage must translate it, or the
-    # contract above would make every PE run crash on the first unmapped extent.
+def _pe_reader(error: Exception | None):
+    import pefile
+
     import callkin_real
 
     class _Pe:
         def get_data(self, rva, size):
-            raise callkin_real_pe_format_error()
-
-    def callkin_real_pe_format_error():
-        class PEFormatError(Exception):
-            pass
-        return PEFormatError("Data outside the mapped file")
+            if error is not None:
+                raise error
+            return bytes([0x90]) * size
 
     image = object.__new__(callkin_real.PeImage)
     image.pe = _Pe()
     image.image_base = 0x140000000
+    image.unmapped_error = pefile.PEFormatError
+    return image
+
+
+def test_the_pe_reader_reports_an_unmapped_rva_as_a_value_error():
+    # pefile raises its own PEFormatError for an RVA outside the mapped file.
+    # PeImage must translate it, or the fail-closed contract would make every
+    # PE run crash on the first unmapped extent.
+    import pefile
+
+    image = _pe_reader(pefile.PEFormatError("Data outside the mapped file"))
     try:
         image.read(0x140001000, 16)
     except ValueError:
         pass
     else:
-        raise AssertionError("PeImage.read leaked a non-ValueError")
+        raise AssertionError("PeImage.read did not translate PEFormatError")
+
+
+def test_the_pe_reader_propagates_anything_else():
+    # Translating every exception would move the broad except out of
+    # build_bodies into the reader rather than remove it: a defect in pefile,
+    # or a typo here, would still be filed as extent_not_file_backed.
+    image = _pe_reader(RuntimeError("reader bug"))
+    try:
+        image.read(0x140001000, 16)
+    except RuntimeError:
+        pass
+    except ValueError:
+        raise AssertionError("a reader defect was disguised as a decode failure")
+
+
+def test_a_pe_read_that_succeeds_returns_the_bytes():
+    assert _pe_reader(None).read(0x140001000, 4) == bytes([0x90]) * 4
 
 
 def main() -> int:
@@ -242,6 +267,8 @@ def main() -> int:
     test_a_reader_value_error_is_a_decode_failure()
     test_any_other_reader_exception_propagates()
     test_the_pe_reader_reports_an_unmapped_rva_as_a_value_error()
+    test_the_pe_reader_propagates_anything_else()
+    test_a_pe_read_that_succeeds_returns_the_bytes()
     print("CallKin-Real body and universe: PASS")
     return 0
 

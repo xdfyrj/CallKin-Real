@@ -230,19 +230,27 @@ def stage_payloads(
 def artifact_envelope(
     *,
     stage: str,
-    binary_path: str,
     binary_sha256: str,
     inputs: dict[str, str],
-    toolchain: dict[str, Any],
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    """A stage artifact: what was computed, and from what.
+
+    No absolute path and no toolchain fingerprint. Those belong to the run,
+    not to the result, and putting them here would make the raw SHA-256 of
+    every stage file differ between a Windows and a WSL run of the same
+    binary even when the grouping came out identical -- which is the one
+    comparison these hashes are for. Where the toolchain does change the
+    result, the payload changes and the hash follows. `run.json` records the
+    path, the toolchain and each stage hash, so a difference can still be
+    attributed.
+    """
     return {
         "schema_version": 3,
         "artifact": f"callkin-real-{stage}",
         "stage": stage,
-        "binary": {"path": binary_path, "sha256": binary_sha256},
+        "binary": {"sha256": binary_sha256},
         "inputs": inputs,
-        "toolchain": toolchain,
         "payload": payload,
     }
 
@@ -411,6 +419,10 @@ class PeImage:
         import pefile
 
         self.path = path
+        # Held so `read` can name the one exception that means "not in the
+        # file". pefile is imported lazily, so the class is not available at
+        # module scope.
+        self.unmapped_error = pefile.PEFormatError
         self.pe = pefile.PE(str(path), fast_load=False)
         if self.pe.FILE_HEADER.Machine != 0x8664:
             raise ValueError("CallKin-Real currently supports x86-64 PE only")
@@ -488,11 +500,12 @@ class PeImage:
             raise ValueError(f"cannot read PE bytes at 0x{address:x}+0x{size:x}")
         try:
             data = self.pe.get_data(rva, size)
-        except Exception as exc:
-            # pefile signals an unmapped RVA with its own PEFormatError. The
-            # reader contract is a single ValueError for "not in the file", so
-            # the translation belongs here rather than in a broad except at the
-            # call site, where it could not be told apart from a real defect.
+        except self.unmapped_error as exc:
+            # PEFormatError is pefile's way of saying the RVA is not backed by
+            # file bytes, which is what ValueError means in the reader
+            # contract. Only that one is translated: catching more would move
+            # the broad except out of body_builder rather than remove it, and a
+            # defect here would still be filed as a property of the binary.
             raise ValueError(
                 f"cannot read PE bytes at 0x{address:x}+0x{size:x}: {exc}"
             ) from exc
@@ -1365,12 +1378,10 @@ def main(argv: list[str] | None = None) -> int:
             path = stage_artifact_path(output, stage)
             digest = write_json(path, artifact_envelope(
                 stage=stage,
-                binary_path=str(binary),
                 binary_sha256=binary_sha256,
                 inputs={
                     name: stage_sha256[name] for name in STAGE_INPUTS[stage]
                 },
-                toolchain=toolchain,
                 payload=payloads[stage],
             ))
             stage_sha256[stage] = digest
