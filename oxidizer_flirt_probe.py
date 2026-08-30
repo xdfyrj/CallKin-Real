@@ -21,6 +21,8 @@ def sha256_file(path: Path) -> str:
 
 def linked_address(project: object, address: int) -> int:
     main = project.loader.main_object
+    if int(main.mapped_base) == int(main.linked_base):
+        return address
     return address - int(main.mapped_base) + int(main.linked_base)
 
 

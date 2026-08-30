@@ -1,6 +1,7 @@
 # CallKin-Real
 
-Stripped-only anonymous call-graph grouping for Rust ELF binaries.
+Stripped-only anonymous call-graph grouping for x86-64 Rust ELF and PE32+
+binaries.
 
 The analyzer does not read a non-stripped binary, source code, ground truth,
 symbol list, candidate list, or symbol-boundary file. It discovers functions
@@ -63,9 +64,10 @@ PR/RE/F1/ARI because those require an external evaluation ground truth.
 
 ## Scope
 
-The current implementation targets x86-64 ELF. Function boundaries are
-discovered evidence, not truth. The graph uses direct calls, direct
-tail-calls, exact RIP-relative ELF relocations, and angr CFGFast singleton
+The analyzer accepts x86-64 ELF and PE32+. Function boundaries are
+discovered evidence, not truth. PE32+ analysis also reads the import address
+table and `.pdata` runtime-function ranges. The graph uses direct calls,
+direct tail-calls, format-specific relocation evidence, and angr CFGFast singleton
 targets. Multiple-target and unresolved indirect calls remain in the JSON and
 do not become fake exact edges. A target address that is exact but outside
 the discovered boundary set becomes an address-only `opaque` anchor. Functions
@@ -74,9 +76,8 @@ WL color.
 
 The candidate scope is deliberately simple: direct FLIRT matches owned by
 `core`, `alloc`, `std`, or `__rustc`, plus imports, are context anchors; every
-other discovered function is a possible candidate. No non-stripped symbol or
-source oracle is read.
+other discovered function is a possible candidate. No source-side input is
+read.
 
 The Oxidizer environment is intentionally separate from CallKin-Real's Python
-environment. Its direct FLIRT output is a library-context label, not a user
-function oracle and not ground truth.
+environment. Its direct FLIRT output is only a library-context label.

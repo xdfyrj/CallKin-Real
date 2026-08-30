@@ -94,9 +94,12 @@ class ElfImage:
         from elftools.elf.relocation import RelocationSection
 
         self.path = path
+        self.format = "ELF x86-64"
+        self.root_source = "ELF entry and discovered function containment"
         self.segments: list[tuple[int, int, int, int, bytes]] = []
         self.executable_ranges: list[tuple[int, int]] = []
         self.relocations: dict[int, int] = {}
+        self.boundary_ranges: list[tuple[int, int]] = []
 
         with path.open("rb") as stream:
             elf = ELFFile(stream)
@@ -146,8 +149,125 @@ class ElfImage:
                 return data[relative:relative + size]
         raise ValueError(f"cannot read ELF bytes at 0x{address:x}+0x{size:x}")
 
+    def relocation_resolver(self, slot: int) -> str:
+        return "elf-relocation"
 
-def discover_radare2(binary: Path, image: ElfImage) -> dict[int, Function]:
+    def synthetic_functions(self) -> dict[int, Function]:
+        return {}
+
+
+class PeImage:
+    """Minimal PE32+ image view used by the stripped-only extractor.
+
+    PE import slots are represented as synthetic functions at their IAT
+    address.  This preserves an exact imported-callee relation without
+    pretending that the runtime-resolved DLL address is present in the file.
+    """
+
+    IMAGE_SCN_MEM_EXECUTE = 0x20000000
+    IMAGE_REL_BASED_DIR64 = 10
+
+    def __init__(self, path: Path) -> None:
+        import pefile
+
+        self.path = path
+        self.pe = pefile.PE(str(path), fast_load=False)
+        if self.pe.FILE_HEADER.Machine != 0x8664:
+            raise ValueError("CallKin-Real currently supports x86-64 PE only")
+        if self.pe.OPTIONAL_HEADER.Magic != 0x20B:
+            raise ValueError("CallKin-Real requires PE32+ (not PE32)")
+
+        self.format = "PE32+ x86-64"
+        self.root_source = "PE image entry and discovered function containment"
+        self.image_base = int(self.pe.OPTIONAL_HEADER.ImageBase)
+        self.entry = self.image_base + int(self.pe.OPTIONAL_HEADER.AddressOfEntryPoint)
+        self.executable_ranges: list[tuple[int, int]] = []
+        self.relocations: dict[int, int] = {}
+        self.relocation_labels: dict[int, str] = {}
+        self.import_slots: dict[int, str] = {}
+        self.boundary_ranges: list[tuple[int, int]] = []
+
+        for section in self.pe.sections:
+            start = self.image_base + int(section.VirtualAddress)
+            size = max(int(section.Misc_VirtualSize), int(section.SizeOfRawData))
+            if section.Characteristics & self.IMAGE_SCN_MEM_EXECUTE and size:
+                self.executable_ranges.append((start, start + size))
+
+        self._load_imports()
+        self._load_base_relocations()
+        self._load_pdata()
+
+    def _load_imports(self) -> None:
+        descriptors = []
+        for directory_name in ("DIRECTORY_ENTRY_IMPORT", "DIRECTORY_ENTRY_DELAY_IMPORT"):
+            descriptors.extend(getattr(self.pe, directory_name, []))
+        for descriptor in descriptors:
+            dll = descriptor.dll.decode(errors="replace") if descriptor.dll else "unknown.dll"
+            for entry in descriptor.imports:
+                slot = int(entry.address)
+                if entry.name:
+                    symbol = entry.name.decode(errors="replace")
+                elif entry.ordinal is not None:
+                    symbol = f"ordinal_{int(entry.ordinal)}"
+                else:
+                    symbol = "unknown"
+                label = f"{dll}!{symbol}"
+                self.import_slots[slot] = label
+                self.relocations[slot] = slot
+                self.relocation_labels[slot] = label
+
+    def _load_base_relocations(self) -> None:
+        for block in getattr(self.pe, "DIRECTORY_ENTRY_BASERELOC", []):
+            for entry in block.entries:
+                if entry.type != self.IMAGE_REL_BASED_DIR64:
+                    continue
+                slot = self.image_base + int(entry.rva)
+                if slot in self.import_slots:
+                    continue
+                try:
+                    target = int.from_bytes(self.read(slot, 8), "little")
+                except ValueError:
+                    continue
+                if target:
+                    self.relocations[slot] = target
+                    self.relocation_labels[slot] = "base-relocation"
+
+    def _load_pdata(self) -> None:
+        for entry in getattr(self.pe, "DIRECTORY_ENTRY_EXCEPTION", []):
+            start = self.image_base + int(entry.struct.BeginAddress)
+            end = self.image_base + int(entry.struct.EndAddress)
+            if end > start and self.is_executable(start):
+                self.boundary_ranges.append((start, end))
+
+    def is_executable(self, address: int) -> bool:
+        return any(start <= address < end for start, end in self.executable_ranges)
+
+    def read(self, address: int, size: int) -> bytes:
+        rva = address - self.image_base
+        if rva < 0:
+            raise ValueError(f"cannot read PE bytes at 0x{address:x}+0x{size:x}")
+        data = self.pe.get_data(rva, size)
+        if len(data) != size:
+            raise ValueError(f"cannot read PE bytes at 0x{address:x}+0x{size:x}")
+        return data
+
+    def relocation_resolver(self, slot: int) -> str:
+        return "pe-import-iat" if slot in self.import_slots else "pe-base-relocation"
+
+    def synthetic_functions(self) -> dict[int, Function]:
+        return {
+            slot: Function(
+                address=slot,
+                size=0,
+                name=name,
+                boundary_source="pe-import-iat",
+                kind="import",
+            )
+            for slot, name in self.import_slots.items()
+        }
+
+
+def discover_radare2(binary: Path, image: Any) -> dict[int, Function]:
     if shutil.which("r2") is None:
         raise RuntimeError("radare2 is required for stripped function discovery")
     try:
@@ -180,12 +300,27 @@ def discover_radare2(binary: Path, image: ElfImage) -> dict[int, Function]:
 
 def link_address(project: Any, mapped: int) -> int:
     obj = project.loader.main_object
+    if int(obj.mapped_base) == int(obj.linked_base):
+        return mapped
     return mapped - int(obj.mapped_base) + int(obj.linked_base)
+
+
+def discover_boundary_functions(image: Any) -> dict[int, Function]:
+    return {
+        start: Function(
+            address=start,
+            size=end - start,
+            name=function_id(start),
+            boundary_source="pe-pdata",
+        )
+        for start, end in getattr(image, "boundary_ranges", [])
+        if end > start and image.is_executable(start)
+    }
 
 
 def discover_angr(
     binary: Path,
-    image: ElfImage,
+    image: Any,
 ) -> tuple[
     dict[int, Function],
     dict[tuple[int, int], set[int]],
@@ -250,6 +385,13 @@ def merge_functions(
     radare: dict[int, Function],
     angr_functions: dict[int, Function],
 ) -> dict[int, Function]:
+    def merge_source(left: str, right: str) -> str:
+        parts = left.split("+")
+        for part in right.split("+"):
+            if part not in parts:
+                parts.append(part)
+        return "+".join(parts)
+
     merged = dict(radare)
     for address, function in angr_functions.items():
         previous = merged.get(address)
@@ -257,9 +399,9 @@ def merge_functions(
             merged[address] = function
         elif previous.size <= 0 and function.size > 0:
             previous.size = function.size
-            previous.boundary_source = "radare2+angr-cfgfast"
+            previous.boundary_source = merge_source(previous.boundary_source, function.boundary_source)
         elif previous is not None:
-            previous.boundary_source = "radare2+angr-cfgfast"
+            previous.boundary_source = merge_source(previous.boundary_source, function.boundary_source)
     return merged
 
 
@@ -291,11 +433,17 @@ def operand_kind(
 
 
 def extract_transfers(
-    image: ElfImage,
+    image: Any,
     functions: dict[int, Function],
 ) -> tuple[list[Transfer], dict[str, Any]]:
     from capstone import CS_ARCH_X86, CS_GRP_CALL, CS_MODE_64, Cs
-    from capstone.x86_const import X86_OP_IMM, X86_OP_MEM, X86_OP_REG, X86_REG_RIP
+    from capstone.x86_const import (
+        X86_OP_IMM,
+        X86_OP_MEM,
+        X86_OP_REG,
+        X86_REG_INVALID,
+        X86_REG_RIP,
+    )
 
     decoder = Cs(CS_ARCH_X86, CS_MODE_64)
     decoder.detail = True
@@ -330,15 +478,23 @@ def extract_transfers(
                     resolver = "direct-tail"
                 else:
                     continue
-            elif (
-                operand is not None
-                and operand.type == X86_OP_MEM
-                and operand.mem.base == X86_REG_RIP
-            ):
-                slot = instruction.address + instruction.size + operand.mem.disp
-                target = image.relocations.get(slot)
+            elif operand is not None and operand.type == X86_OP_MEM:
+                slot: int | None = None
+                if operand.mem.base == X86_REG_RIP:
+                    slot = instruction.address + instruction.size + operand.mem.disp
+                elif (
+                    operand.mem.base == X86_REG_INVALID
+                    and operand.mem.index == X86_REG_INVALID
+                ):
+                    slot = operand.mem.disp & ((1 << 64) - 1)
+                if slot is None:
+                    if not is_call and instruction.address != terminal:
+                        continue
+                    target = None
+                else:
+                    target = image.relocations.get(slot)
                 if target is not None:
-                    resolver = "elf-relocation"
+                    resolver = image.relocation_resolver(slot)
                 elif not is_call and instruction.address != terminal:
                     continue
             elif not is_call and instruction.address != terminal:
@@ -390,6 +546,11 @@ def extract_transfers(
         "opaque_target_transfer_count": sum(item.status == "unmapped" for item in transfers),
         "resolved_by_elf_relocation": sum(
             item.resolver == "elf-relocation" and item.status == "resolved"
+            for item in transfers
+        ),
+        "resolved_by_relocation": sum(
+            item.resolver in {"elf-relocation", "pe-import-iat", "pe-base-relocation"}
+            and item.status == "resolved"
             for item in transfers
         ),
     }
@@ -496,7 +657,7 @@ def owner_from_name(name: str) -> str | None:
 
 
 def is_import(function: Function) -> bool:
-    return function.name.startswith("sym.imp.") or function.kind == "sym"
+    return function.name.startswith("sym.imp.") or function.kind in {"sym", "import"}
 
 
 def make_graph(
@@ -639,18 +800,24 @@ def wl_clusters(
     raise RuntimeError("CG-WL did not reach a fixpoint")
 
 
-def choose_root(image: ElfImage, functions: dict[int, Function]) -> int | None:
+def choose_root(image: Any, functions: dict[int, Function]) -> int | None:
     if image.entry in functions:
         return image.entry
     containing = function_for(functions, image.entry)
     return containing.address if containing else None
 
 
+def load_image(binary: Path) -> Any:
+    with binary.open("rb") as stream:
+        magic = stream.read(2)
+    return PeImage(binary) if magic == b"MZ" else ElfImage(binary)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="CallKin-Real: stripped-only anonymous Rust call-graph grouping."
     )
-    parser.add_argument("binary", help="stripped x86-64 ELF binary")
+    parser.add_argument("binary", help="stripped x86-64 ELF or PE32+ binary")
     parser.add_argument("--output", help="JSON output path; defaults to results/<binary>.callkin-real.json")
     parser.add_argument(
         "--oxidizer-dir",
@@ -676,14 +843,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: stripped binary not found: {binary}", file=sys.stderr)
         return 1
     try:
-        image = ElfImage(binary)
+        image = load_image(binary)
         radare = discover_radare2(binary, image)
         angr_functions, angr_targets, angr_seen_sites, angr_run = discover_angr(binary, image)
-        functions = merge_functions(radare, angr_functions)
+        boundary = discover_boundary_functions(image)
+        functions = merge_functions(radare, boundary)
+        functions = merge_functions(functions, angr_functions)
+        functions = merge_functions(functions, image.synthetic_functions())
+        if image.entry not in functions and image.is_executable(image.entry):
+            functions[image.entry] = Function(
+                address=image.entry,
+                size=0,
+                name=function_id(image.entry),
+                boundary_source="image-entry",
+                kind="entry",
+            )
         transfers, direct_summary = extract_transfers(image, functions)
         angr_summary = apply_angr_resolutions(transfers, angr_targets, angr_seen_sites)
         total_indirect = direct_summary["total_indirect_sites"]
-        resolved_static = direct_summary["resolved_by_elf_relocation"]
+        resolved_static = direct_summary["resolved_by_relocation"]
         resolved_dynamic = angr_summary["resolved_by_angr"]
         indirect_summary = {
             **direct_summary,
@@ -730,38 +908,44 @@ def main(argv: list[str] | None = None) -> int:
             function_json.append({
                 "id": function.id,
                 "address": hex_address(address),
+                "name": function.name,
+                "kind": function.kind,
                 "size": function.size or None,
                 "status": statuses.get(address, "opaque"),
                 "boundary_source": function.boundary_source,
                 "flirt": function.flirt,
             })
+        format_discovery = (
+            ["PE IAT", "PE base relocations", "PE .pdata"]
+            if image.format.startswith("PE")
+            else ["ELF relocations"]
+        )
         result = {
             "schema_version": 1,
             "tool": "CallKin-Real",
             "analysis": {
                 "input": "stripped-only",
-                "oracle_level": "none",
                 "relation_mode": RELATION_MODE,
                 "candidate_rule": "all discovered non-library functions with a resolved non-self IN or OUT edge",
-                "edge_rule": "exact direct, exact ELF relocation, and angr singleton targets; address-only targets become opaque anchors",
+                "edge_rule": "exact direct, format-specific relocation/IAT, and angr singleton targets; address-only targets become opaque anchors",
                 "discovery": [
                     "radare2",
                     "angr-CFGFast",
                     "capstone",
-                    "ELF relocations",
+                    *format_discovery,
                     "Oxidizer direct FLIRT",
                 ],
             },
             "binary": {
                 "path": str(binary),
                 "sha256": sha256_file(binary),
-                "format": "ELF x86-64",
+                "format": image.format,
                 "entry": hex_address(image.entry),
             },
             "root": {
                 "id": function_id(root) if root is not None else None,
                 "address": hex_address(root),
-                "source": "ELF entry and discovered function containment",
+                "source": image.root_source,
             },
             "predicted_clusters": clusters,
             "rounds": rounds,
