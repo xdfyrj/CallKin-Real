@@ -183,6 +183,8 @@ def stage_payloads(
     edges: list[dict[str, Any]],
     clusters: dict[str, list[str]],
     rounds: int,
+    round_history: list[dict[str, Any]],
+    anchor_classes: dict[str, str],
     abstentions: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     """The four label-free stage payloads.
@@ -220,6 +222,13 @@ def stage_payloads(
         "relation": {
             "rounds": rounds,
             "predicted_clusters": clusters,
+            # Every round, not just the fixpoint. The relation retrieval view
+            # scores how long two functions stayed together, so dropping the
+            # intermediate partitions would leave it with one bit.
+            "round_history": round_history,
+            # Colours of the fixed nodes 1-WL refined against: root, imports
+            # and address-only targets. Image facts, never a FLIRT label.
+            "anchor_classes": anchor_classes,
             # The projected graph 1-WL actually saw.
             "edges": edges,
             "functions": project(("id", "relation_status")),
@@ -1171,6 +1180,10 @@ def wl_clusters(
         else:
             colors[address] = f"USER:self={self_count[address]}:distinct_out={len(outgoing[address])}"
 
+    # Always recorded. The relation view's profile is built from the whole
+    # round history, not just the fixpoint, so an adapter that only ever sees
+    # the artifacts needs it there. `--trace` still decides whether the run
+    # manifest repeats it.
     traces: list[dict[str, Any]] = []
 
     def candidate_partition(current: dict[int, str]) -> dict[str, list[str]]:
@@ -1187,8 +1200,7 @@ def wl_clusters(
             groups[current[address]].append(address)
         return tuple(sorted(tuple(sorted(group)) for group in groups.values()))
 
-    if trace:
-        traces.append({"round": 0, "clusters": candidate_partition(colors)})
+    traces.append({"round": 0, "clusters": candidate_partition(colors)})
 
     for round_index in range(1, len(active) + 1):
         signatures: dict[int, tuple[Any, ...]] = {}
@@ -1210,8 +1222,7 @@ def wl_clusters(
         new_colors = {address: unique[signature] for address, signature in signatures.items()}
         changed = full_partition(new_colors) != full_partition(colors)
         colors = new_colors
-        if trace:
-            traces.append({"round": round_index, "changed": changed, "clusters": candidate_partition(colors)})
+        traces.append({"round": round_index, "changed": changed, "clusters": candidate_partition(colors)})
         if not changed:
             return candidate_partition(colors), round_index, traces
     raise RuntimeError("CG-WL did not reach a fixpoint")
@@ -1367,6 +1378,12 @@ def main(argv: list[str] | None = None) -> int:
             edges=edge_json,
             clusters=clusters,
             rounds=rounds,
+            round_history=traces,
+            anchor_classes={
+                function_id(address): color
+                for address, color in sorted(anchor_colors.items())
+                if relation_status.get(address) == RELATION_CONTEXT
+            },
             abstentions=abstentions,
         )
         # One file per stage, written in dependency order so each records the

@@ -303,6 +303,8 @@ def _stages(labelled: bool) -> dict:
         edges=[{"source": "FUN_00101000", "target": "FUN_00102000", "count": 1}],
         clusters={"C1": ["FUN_00102000"]},
         rounds=2,
+        round_history=[{"round": 0, "clusters": {"C1": ["FUN_00102000"]}}],
+        anchor_classes={"FUN_00101000": "root"},
         abstentions=[],
     )
 
@@ -338,6 +340,8 @@ def test_a_stage_hash_moves_when_that_stage_moves():
         edges=[{"source": "FUN_00101000", "target": "FUN_00102000", "count": 1}],
         clusters={"C1": ["FUN_00101000", "FUN_00102000"]},
         rounds=2,
+        round_history=[{"round": 0, "clusters": {"C1": ["FUN_00102000"]}}],
+        anchor_classes={"FUN_00101000": "root"},
         abstentions=[],
     )
     assert canonical_sha256(moved["relation"]) != baseline["relation"]
