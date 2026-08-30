@@ -655,14 +655,40 @@ def apply_angr_resolutions(
     return summary
 
 
+def default_oxidizer_dir() -> Path:
+    """Oxidizer lives on the same disk under either name, depending on the OS.
+
+    A WSL-only default silently turns "FLIRT ran and found nothing" into "FLIRT
+    could not start", which is the one distinction the label stage must keep.
+    """
+    for candidate in (
+        Path("/mnt/c/Users/sumyr/playground/oxidizer"),
+        Path("C:/Users/sumyr/playground/oxidizer"),
+    ):
+        if candidate.is_dir():
+            return candidate
+    return Path("oxidizer")
+
+
 def run_flirt(
     binary: Path,
     oxidizer_dir: Path,
     probe_path: Path,
     timeout: int,
 ) -> tuple[dict[int, dict[str, str]], dict[str, Any]]:
-    oxidizer_python = oxidizer_dir / ".venv" / "bin" / "python"
-    if oxidizer_python.is_file():
+    # The venv layout differs by platform: bin/python on POSIX, Scripts on Windows.
+    oxidizer_python = next(
+        (
+            candidate
+            for candidate in (
+                oxidizer_dir / ".venv" / "bin" / "python",
+                oxidizer_dir / ".venv" / "Scripts" / "python.exe",
+            )
+            if candidate.is_file()
+        ),
+        None,
+    )
+    if oxidizer_python is not None:
         command_prefix = [str(oxidizer_python)]
     elif shutil.which("uv") is not None:
         command_prefix = ["uv", "run", "--frozen", "python"]
@@ -954,7 +980,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", help="JSON output path; defaults to results/<binary>.callkin-real.json")
     parser.add_argument(
         "--oxidizer-dir",
-        default="/mnt/c/Users/sumyr/playground/oxidizer",
+        default=str(default_oxidizer_dir()),
         help="Oxidizer checkout containing uv.lock",
     )
     parser.add_argument(
