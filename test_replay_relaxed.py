@@ -13,6 +13,16 @@ from replay_relaxed import micro_aggregate, score_replay
 A, B, C = "A", "B", "C"
 
 
+def test_wsl_frozen_paths_translate_only_for_windows_runtime():
+    wsl = Path("/mnt/c/users/sumyr/playground/REV/v0-engine-py-f1")
+    assert str(replay.native_path(wsl, os_name="nt")).replace("\\", "/") == (
+        "C:/users/sumyr/playground/REV/v0-engine-py-f1"
+    )
+    assert replay.native_path(wsl, os_name="posix") == wsl
+    ordinary = Path("relative/results")
+    assert replay.native_path(ordinary, os_name="nt") == ordinary
+
+
 def test_replay_scores_prediction_only_after_it_is_built():
     report = score_replay(
         strict_groups=[[A, B]], rescue_groups=[[A, B]],
@@ -299,6 +309,7 @@ def test_stale_prediction_or_v0_fails_before_oracle_json_loader():
 
 
 if __name__ == "__main__":
+    test_wsl_frozen_paths_translate_only_for_windows_runtime()
     test_replay_scores_prediction_only_after_it_is_built()
     test_micro_aggregate_sums_pair_counts_before_rounding()
     test_crlf_rescue_uses_canonical_digest_for_f7_validation()

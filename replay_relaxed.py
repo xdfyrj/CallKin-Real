@@ -17,6 +17,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import re
 import sys
 from dataclasses import dataclass
 from itertools import combinations
@@ -59,9 +61,20 @@ class Subject:
     v0: Path
 
 
-F1 = Path("/mnt/c/users/sumyr/playground/REV/v0-engine-py-f1")
-FROZEN = Path("/mnt/c/users/sumyr/playground/REV/v0-engine-py-frozen")
-V0 = Path("/mnt/c/users/sumyr/playground/REV/v0-engine-py")
+def native_path(value: str | Path, *, os_name: str | None = None) -> Path:
+    """Translate an existing WSL mount path for the frozen Windows runtime."""
+    text = str(value).replace("\\", "/")
+    if (os_name or os.name) == "nt":
+        match = re.fullmatch(r"/mnt/([A-Za-z])(?:/(.*))?", text)
+        if match:
+            drive, tail = match.groups()
+            text = f"{drive.upper()}:/{tail or ''}"
+    return Path(text)
+
+
+F1 = native_path("/mnt/c/users/sumyr/playground/REV/v0-engine-py-f1")
+FROZEN = native_path("/mnt/c/users/sumyr/playground/REV/v0-engine-py-frozen")
+V0 = native_path("/mnt/c/users/sumyr/playground/REV/v0-engine-py")
 
 SUBJECTS: dict[str, Subject] = {
     "ripgrep-main": Subject(
