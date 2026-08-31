@@ -9,8 +9,8 @@ Three scores, kept apart, because combining them hides which stage failed.
 
     discovery   did the tool find the function, with the right extent, and
                 did its bytes decode
-    grouping    V0 relation-only, V1 strict and V1 strict+F7 on the same
-                discovered universe
+    grouping    V0 relation-only, V1 strict, V1 strict+F7 and the experimental
+                provisional attachments on the same discovered universe
     label       direct FLIRT correctness, and what propagation added
 
 Spec 12.1 is explicit that boundary evaluation stays its own result and is
@@ -31,6 +31,8 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+
+import v1_relaxed
 
 # The linkage-overlay vocabulary. A pair that ground truth cannot decide is not
 # a wrong answer, so it is counted apart rather than charged to precision.
@@ -201,6 +203,9 @@ def score_grouping(
     families: dict[str, Any] | None,
     rescue: dict[str, Any] | None,
     neutral: dict[tuple[str, str], str] | None = None,
+    *,
+    relaxed: dict[str, Any] | None = None,
+    family_artifact_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Spec 12.2. The three methods on one universe, so they are comparable."""
     universe = {
@@ -251,6 +256,29 @@ def score_grouping(
             "rescued_family_count": summary["rescued_family_count"],
             "comparison_count": summary["reserved_comparisons"],
             "alignment_cell_count": summary["reserved_alignment_cells"],
+        }
+
+    if relaxed is None:
+        methods["v1_relaxed_provisional"] = {"status": "not produced"}
+    else:
+        if families is None or family_artifact_sha256 is None:
+            raise EvaluationError(
+                "a relaxed artifact requires the strict family artifact it extends"
+            )
+        groups = v1_relaxed.groups_for_scoring(
+            relaxed,
+            families,
+            family_artifact_sha256=family_artifact_sha256,
+        )
+        methods["v1_relaxed_provisional"] = {
+            **score_partition(groups, ground_truth, universe, neutral),
+            "attachment_count": relaxed["summary"]["attached_member_count"],
+            "ambiguous_member_count": relaxed["summary"]["ambiguous_member_count"],
+            "vetoed_hypothesis_count": relaxed["summary"]["vetoed_hypothesis_count"],
+            "note": (
+                "experimental provisional attachments; not accepted families "
+                "and never used for FLIRT propagation"
+            ),
         }
     return {"universe_member_count": len(universe), "methods": methods}
 
@@ -386,6 +414,7 @@ def evaluate(
 
     families, families_sha = optional(".v1.families.strict.json")
     rescue, rescue_sha = optional(".v1.families.rescue.json")
+    relaxed, relaxed_sha = optional(".v1.families.relaxed.json")
     labels, labels_sha = optional(".labels.direct.json")
     propagation, propagation_sha = optional(".v1.labels.strict.json")
 
@@ -406,6 +435,7 @@ def evaluate(
             "stage_sha256": run["stage_sha256"],
             "families_strict_sha256": families_sha,
             "families_rescue_sha256": rescue_sha,
+            "families_relaxed_sha256": relaxed_sha,
             "labels_direct_sha256": labels_sha,
             "label_propagation_sha256": propagation_sha,
             "linkage_audit_sha256": (
@@ -416,7 +446,14 @@ def evaluate(
         "runtime_seconds": run.get("execution", {}).get("duration_seconds"),
         "discovery": score_discovery(ground_truth, universe, body),
         "grouping": score_grouping(
-            ground_truth, universe, relation, families, rescue, neutral
+            ground_truth,
+            universe,
+            relation,
+            families,
+            rescue,
+            neutral,
+            relaxed=relaxed,
+            family_artifact_sha256=families_sha,
         ),
         "label": score_labels(ground_truth, labels, propagation, universe),
     }

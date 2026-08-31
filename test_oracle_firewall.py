@@ -31,6 +31,7 @@ HERE = Path(__file__).resolve().parent
 ANALYSIS_ROOTS = (
     "callkin_real.py", "body_builder.py", "body_comparison.py",
     "real_v1_adapter.py", "v1_retrieval.py", "v1_grouping.py", "v1_rescue.py",
+    "v1_relaxed.py",
     "flirt_labels.py", "label_propagation.py", "rust_symbol_parser.py",
 )
 # Names that must never be importable from the analysis path.

@@ -64,6 +64,10 @@ def build_propagation(
     id_bias: int = callkin_real.ID_BIAS,
 ) -> dict[str, Any]:
     """Run the frozen propagation core over CallKin-Real artifacts."""
+    if family_artifact.get("artifact") != "v1-family-grouping":
+        raise ValueError(
+            "FLIRT propagation requires the strict v1-family-grouping artifact"
+        )
     validate_label_artifact(label_artifact)
     if label_artifact["id_bias"] != id_bias:
         raise ValueError(
