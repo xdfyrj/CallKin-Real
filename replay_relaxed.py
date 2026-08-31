@@ -38,11 +38,12 @@ from v1_relaxed import (
 
 
 FORMAL_VERSION = (3, 14, 7)
-FORMAL_RUNTIME = "/mnt/c/Python314/python.exe"
 FORMAL_RUNTIME_DISPLAY = "C:/Python314/python.exe"
 MAX_COMPARISONS = 10_000
 MAX_ALIGNMENT_CELLS = 500_000_000
 RESULTS_ROOT = Path(__file__).resolve().parent / "results" / "replay-relaxed-v1"
+FORMAL_CONFIG_PATH = Path(__file__).resolve().parent / "frozen_v1" / "configs" / "v1.formal.json"
+FORMAL_CONFIG_SHA256 = "77f394244c67b6633698e80af5265da4544c8ad5033aff7d0474a5ff8f1eebfa"
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,48 @@ SUBJECTS: dict[str, Subject] = {
     ),
 }
 
+# These are immutable pins discovered from the sibling frozen repositories.
+# A same-run manifest is never trusted as a substitute: replacing a frozen
+# input and updating its manifest must still fail closed.
+FROZEN_PINS: dict[str, dict[str, str]] = {
+    "ripgrep-main": {
+        "body": "4bcc861d59b8e28064184d69b471314e6486e6ce5d23f04cfbcef84eac79d8db",
+        "candidates": "e13ff3713b698706c95c6af4e35ae485b7d83caca161b0246f0421a5d7a9ebfd",
+        "strict": "fcf9ab00f55d7df01e8aa6afc3b84b52b5688519a61f3bd06c8d758f7fd0218e",
+        "rescue": "a85adae6d3a0d7868416e346d067c8ff8c01bc87b587de5ce2229206f41f46b2",
+        "ground_truth": "e792a9c8442ffb833b5d47f34fbcf5f26395c8369230780f0a46a5903b5bf166",
+        "linkage_audit": "fb939a2e6120514a8b67cdff2b5236ee31f3fa4752fb520722b7d7a8a7fd314e",
+        "v0": "696ba61b32fa2bfdc780b16f0e9496415e3925e1a17eb98fa3a5d742838323ff",
+        "config": FORMAL_CONFIG_SHA256,
+    },
+    "fd": {
+        "body": "ebed20a449a0d758a3e134b985ffb8764455d75d56682415fe5b393d57ec0743",
+        "candidates": "3e99e07b7255f722cc9342b7389fc61a4bbd1b407a1950ff938d0ede3f7dbac2",
+        "strict": "7cd92784e734b3fcfc67455010af92c1cbf0e252774afbfa1a570007612c5320",
+        "rescue": "87a39e77561a723bf2ec98ea7dbe2a3281939a9cc024ab6d1e85d5ef2f28d380",
+        "ground_truth": "ada83ff652f59decbde72328b3d34daa1d0e73b19aa80f96c6dd4a8c578818af",
+        "linkage_audit": "d30d5389c7f09c830962f26110f2f65ca1d46f429005c37e7357d1784331aaf6",
+        "v0": "c711e11d2a6e3985569595c9bc58f88a9804fd4418623dc35fecf98b5baad671",
+        "config": FORMAL_CONFIG_SHA256,
+    },
+    "zoxide": {
+        "body": "e1776d94199d13d2f995097f191ac78f5de3a5f5c00df80bd7dd78dd42a182cd",
+        "candidates": "c60aca1fccfc175d0e2dc1325d74818be7e4ea4408f38c4f0bd3f3f40911697e",
+        "strict": "9cf218e2a04965ab3e4c1924464da841ebfcab9df1580595af0546d008e91264",
+        "rescue": "9d273f6028ef698c4144f57207f0548c3616e51c36d03e0183acd58bf21884b3",
+        "ground_truth": "b5e641338cd098ead94ea299b7dccd3a4ca2b8242743656762cf8f01617d967d",
+        "linkage_audit": "aea76c11cb78074695ea2ac4acc8f08026f61d81fa747d9d42948bf82f3da579",
+        "v0": "11fe9ef1c0ee3a26013502289502c620a92e73b4f97657de1f68f29f653365a4",
+        "config": FORMAL_CONFIG_SHA256,
+    },
+}
+
+FROZEN_CANONICAL_RESCUE_PINS: dict[str, str] = {
+    "ripgrep-main": "7bcda77c522ec3cf91cc0c8235b8aa6df205157eca056da263f3bc5c98a4753d",
+    "fd": "b4f16c026664fc1ef048b4b15daa0de13d49a528427fd73ce79958569f8ce889",
+    "zoxide": "6337128a57eec932695e84bdf8736cb6582cadbf97d0523479f40827236e3d7e",
+}
+
 
 def sha256_bytes(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
@@ -125,6 +168,28 @@ def _record(path: Path, digest: str) -> dict[str, str]:
     return {"path": str(path), "sha256": digest}
 
 
+def _pin(subject: Subject, name: str) -> str:
+    try:
+        return FROZEN_PINS[subject.name][name]
+    except KeyError as exc:
+        raise ValueError(f"no immutable pin for {subject.name}/{name}") from exc
+
+
+def _assert_pinned_digest(subject: Subject, name: str, path: Path, digest: str) -> None:
+    expected = _pin(subject, name)
+    if digest != expected:
+        raise ValueError(
+            f"frozen {subject.name}/{name} hash drift: {path} is {digest}, "
+            f"expected pinned {expected}"
+        )
+
+
+def _assert_pinned_file(subject: Subject, name: str, path: Path) -> str:
+    digest = sha256_file(path)
+    _assert_pinned_digest(subject, name, path, digest)
+    return digest
+
+
 def _metadata_match(*values: Mapping[str, Any]) -> None:
     for key in ("case", "build", "profile", "scope"):
         observed = {item.get(key) for item in values}
@@ -143,6 +208,7 @@ def _subject_inputs(subject: Subject) -> tuple[dict[str, Any], dict[str, str]]:
     hashes: dict[str, str] = {}
     for name, path in paths.items():
         artifacts[name], hashes[name] = read_json(path)
+        _assert_pinned_digest(subject, name, path, hashes[name])
 
     body, candidates = artifacts["body"], artifacts["candidates"]
     strict, rescue = artifacts["strict"], artifacts["rescue"]
@@ -166,6 +232,13 @@ def _subject_inputs(subject: Subject) -> tuple[dict[str, Any], dict[str, str]]:
         raise ValueError("rescue artifact does not name the supplied candidate bytes")
     if rescue.get("provenance", {}).get("body_evidence_sha256") != hashes["body"]:
         raise ValueError("rescue artifact does not name the supplied body bytes")
+    canonical_rescue_sha = canonical_artifact_sha(rescue)
+    if canonical_rescue_sha != FROZEN_CANONICAL_RESCUE_PINS[subject.name]:
+        raise ValueError(
+            f"frozen {subject.name}/rescue canonical hash drift: "
+            f"{canonical_rescue_sha} != {FROZEN_CANONICAL_RESCUE_PINS[subject.name]}"
+        )
+    hashes["rescue_canonical"] = canonical_rescue_sha
     targets = (strict.get("universe") or {}).get("target_ids")
     candidate_targets = (candidates.get("universe") or {}).get("target_ids")
     if not isinstance(targets, list) or targets != candidate_targets:
@@ -174,9 +247,15 @@ def _subject_inputs(subject: Subject) -> tuple[dict[str, Any], dict[str, str]]:
 
 
 def _load_config() -> tuple[PairPolicyConfig, Path, str]:
-    path = Path(__file__).resolve().parent / "frozen_v1" / "configs" / "v1.formal.json"
+    path = FORMAL_CONFIG_PATH
     raw = path.read_bytes()
-    return PairPolicyConfig.from_file(path), path, sha256_bytes(raw)
+    digest = sha256_bytes(raw)
+    if digest != FORMAL_CONFIG_SHA256:
+        raise ValueError(
+            f"formal config hash drift: {path} is {digest}, "
+            f"expected pinned {FORMAL_CONFIG_SHA256}"
+        )
+    return PairPolicyConfig.from_file(path), path, digest
 
 
 def _comparable_bodies(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -211,7 +290,7 @@ def _strict_view(artifact: Mapping[str, Any]) -> tuple[dict[str, tuple[str, ...]
 def dry_price(
     strict: Mapping[str, Any], candidates: Mapping[str, Any], bodies: Mapping[str, Any],
     config: PairPolicyConfig, rescue: Mapping[str, Any],
-    strict_sha: str, rescue_sha: str, candidate_sha: str,
+    strict_sha: str, candidate_sha: str,
 ) -> dict[str, Any]:
     """Price the complete strict/F7 union without evaluating a pair."""
     strict_cores, f7_cores = _core_partitions(
@@ -233,8 +312,15 @@ def dry_price(
     }
 
 
-def _load_v0_groups(path: Path, strict: Mapping[str, Any]) -> tuple[list[list[str]], dict[str, str]]:
+def _load_v0_groups(
+    path: Path,
+    strict: Mapping[str, Any],
+    *,
+    expected_sha256: str | None = None,
+) -> tuple[list[list[str]], dict[str, str]]:
     payload, digest = read_json(path)
+    if expected_sha256 is not None and digest != expected_sha256:
+        raise ValueError(f"V0 result hash drift: {path} is {digest}, expected {expected_sha256}")
     runs = payload.get("results", [])
     if not isinstance(runs, list):
         raise ValueError("V0 result has no results list")
@@ -395,13 +481,14 @@ def _prediction_paths(subject: Subject, output_root: Path) -> tuple[Path, Path, 
 
 def predict_subject(subject: Subject, output_root: Path) -> dict[str, Any]:
     """Build and publish both relaxed prediction artifacts, never opening GT."""
+    _require_formal_runtime()
     output_root = Path(output_root).resolve()
     artifacts, hashes = _subject_inputs(subject)
     config, config_path, config_sha = _load_config()
     bodies = _comparable_bodies(artifacts["body"])
     price = dry_price(
         artifacts["strict"], artifacts["candidates"], bodies, config,
-        artifacts["rescue"], hashes["strict"], hashes["rescue"], hashes["candidates"],
+        artifacts["rescue"], hashes["strict"], hashes["candidates"],
     )
     inputs = {
         name: _record(path, hashes[name])
@@ -412,6 +499,7 @@ def predict_subject(subject: Subject, output_root: Path) -> dict[str, Any]:
             "rescue": subject.rescue,
         }.items()
     }
+    inputs["rescue"]["canonical_sha256"] = hashes["rescue_canonical"]
     inputs["config"] = _record(config_path, config_sha)
     relaxed_path, rescue_relaxed_path, manifest_path = _prediction_paths(subject, output_root)
     manifest: dict[str, Any] = {
@@ -436,7 +524,7 @@ def predict_subject(subject: Subject, output_root: Path) -> dict[str, Any]:
         # The frozen rescue input is a Windows CRLF file.  Its provenance is
         # recorded using the bytes on disk, while the validator's artifact
         # identity is the canonical JSON digest.
-        rescue_artifact_sha256=canonical_artifact_sha(artifacts["rescue"]),
+        rescue_artifact_sha256=hashes["rescue_canonical"],
     )
     if rescue_relaxed is None:
         raise ValueError("frozen F7 rescue input did not produce an F7 relaxed artifact")
@@ -454,7 +542,8 @@ def predict_subject(subject: Subject, output_root: Path) -> dict[str, Any]:
     )
     groups_for_scoring(
         rescue_disk, artifacts["strict"], family_artifact_sha256=hashes["strict"],
-        rescue_artifact=artifacts["rescue"], rescue_artifact_sha256=hashes["rescue"],
+        rescue_artifact=artifacts["rescue"],
+        rescue_artifact_sha256=hashes["rescue_canonical"],
     )
     manifest.update({
         "status": "predictions-built",
@@ -499,8 +588,14 @@ def score_subject(subject: Subject, output_root: Path) -> dict[str, Any]:
             current = config_sha
         if recorded != current:
             raise ValueError(f"prediction manifest {name} hash does not match frozen input")
+    recorded_rescue_canonical = (
+        (manifest.get("inputs", {}).get("rescue") or {}).get("canonical_sha256")
+    )
+    if recorded_rescue_canonical != input_hashes["rescue_canonical"]:
+        raise ValueError(
+            "prediction manifest rescue canonical hash does not match frozen input"
+        )
     strict_sha = input_hashes["strict"]
-    rescue_sha = input_hashes["rescue"]
     relaxed_path, rescue_relaxed_path, _ = _prediction_paths(subject, output_root)
     strict = inputs["strict"]
     # Validate the complete prediction payloads before opening either oracle.
@@ -512,9 +607,28 @@ def score_subject(subject: Subject, output_root: Path) -> dict[str, Any]:
     rescue_relaxed_groups = groups_for_scoring(
         rescue_relaxed, strict, family_artifact_sha256=strict_sha,
         rescue_artifact=inputs["rescue"],
-        rescue_artifact_sha256=canonical_artifact_sha(inputs["rescue"]),
+        rescue_artifact_sha256=input_hashes["rescue_canonical"],
+    )
+    strict_groups = _groups_from_strict(strict)
+    rescue_groups = _groups_from_rescue(inputs["rescue"])
+    _core_partitions(
+        strict,
+        inputs["candidates"],
+        inputs["rescue"],
+        strict_sha,
+        input_hashes["rescue_canonical"],
+        input_hashes["candidates"],
+    )
+    # Hash and parse every remaining non-oracle frozen input before opening the
+    # oracle files.  A stale V0 partition is therefore rejected at the same
+    # boundary as a stale prediction.
+    v0_sha = _assert_pinned_file(subject, "v0", subject.v0)
+    v0_groups, v0_record = _load_v0_groups(
+        subject.v0, strict, expected_sha256=v0_sha,
     )
     # This is the first point at which either oracle file is read.
+    _assert_pinned_file(subject, "ground_truth", subject.ground_truth)
+    _assert_pinned_file(subject, "linkage_audit", subject.linkage_audit)
     ground_truth, gt_sha = read_json(subject.ground_truth)
     linkage, linkage_sha = read_json(subject.linkage_audit)
     _metadata_match(strict, ground_truth, linkage)
@@ -526,9 +640,6 @@ def score_subject(subject: Subject, output_root: Path) -> dict[str, Any]:
     normalized_path = output_root / subject.name / "linkage-pairs.json"
     _, normalized_sha, neutral_counts = _normalized_linkage(linkage, universe, normalized_path)
     neutral = evaluate.load_neutral_pairs(normalized_path)
-    v0_groups, v0_record = _load_v0_groups(subject.v0, strict)
-    strict_groups = _groups_from_strict(strict)
-    rescue_groups = _groups_from_rescue(inputs["rescue"])
     metrics = score_replay(
         strict_groups=strict_groups, rescue_groups=rescue_groups,
         strict_relaxed_groups=relaxed_groups,
@@ -593,7 +704,7 @@ def run_replay(
             bodies = _comparable_bodies(artifacts["body"])
             price = dry_price(
                 artifacts["strict"], artifacts["candidates"], bodies, config,
-                artifacts["rescue"], hashes["strict"], hashes["rescue"], hashes["candidates"],
+                artifacts["rescue"], hashes["strict"], hashes["candidates"],
             )
             case_reports.append({
                 "case": subject.name, "status": price["status"], "price": price,
