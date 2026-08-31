@@ -593,12 +593,83 @@ def _load_prediction_manifest(subject: Subject, output_root: Path) -> tuple[dict
     return manifest, strict, rescue_relaxed
 
 
-def score_subject(subject: Subject, output_root: Path) -> dict[str, Any]:
+def _rebuild_relaxed_predictions(
+    artifacts: Mapping[str, Any],
+    hashes: Mapping[str, str],
+    bodies: Mapping[str, Any],
+    config: PairPolicyConfig,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Recompute relaxed outputs from the pinned non-oracle inputs.
+
+    The prediction manifest and prediction files are mutable run outputs.  A
+    caller may edit both and update their recorded SHA-256 values, so those
+    values alone cannot establish what was actually predicted.  Rebuilding
+    from the pinned body/candidate/strict/rescue/config inputs gives score mode
+    an independent reference before it opens either oracle.
+    """
+    strict_relaxed, rescue_relaxed = build_relaxed_artifacts(
+        artifacts["strict"],
+        artifacts["candidates"],
+        bodies,
+        config,
+        family_artifact_sha256=hashes["strict"],
+        candidate_artifact_sha256=hashes["candidates"],
+        rescue_artifact=artifacts["rescue"],
+        rescue_artifact_sha256=hashes["rescue_canonical"],
+    )
+    if rescue_relaxed is None:
+        raise ValueError("frozen F7 rescue input did not produce an F7 relaxed artifact")
+    return strict_relaxed, rescue_relaxed
+
+
+def _verify_prediction_rebuild(
+    manifest: Mapping[str, Any],
+    strict_relaxed: Mapping[str, Any],
+    rescue_relaxed: Mapping[str, Any],
+    expected_strict: Mapping[str, Any],
+    expected_rescue: Mapping[str, Any],
+) -> None:
+    """Reject predictions that do not equal the deterministic rebuild."""
+    expected = {
+        "strict_relaxed": expected_strict,
+        "strict_f7_relaxed": expected_rescue,
+    }
+    observed = {
+        "strict_relaxed": strict_relaxed,
+        "strict_f7_relaxed": rescue_relaxed,
+    }
+    predictions = manifest.get("predictions")
+    if not isinstance(predictions, Mapping):
+        raise ValueError("prediction manifest has no predictions")
+    for name in ("strict_relaxed", "strict_f7_relaxed"):
+        observed_bytes = canonical_bytes(observed[name])
+        expected_bytes = canonical_bytes(expected[name])
+        observed_sha = sha256_bytes(observed_bytes)
+        expected_sha = sha256_bytes(expected_bytes)
+        if observed_bytes != expected_bytes or observed_sha != expected_sha:
+            raise ValueError(
+                f"{name} prediction does not match deterministic rebuild"
+            )
+        recorded_sha = (predictions.get(name) or {}).get("sha256")
+        if recorded_sha != expected_sha:
+            raise ValueError(
+                f"{name} prediction hash does not match deterministic rebuild"
+            )
+
+
+def score_subject(
+    subject: Subject,
+    output_root: Path,
+    *,
+    trusted_manifest: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Validate predictions first, then open GT/linkage and score one subject."""
     output_root = Path(output_root).resolve()
     manifest, strict_relaxed, rescue_relaxed = _load_prediction_manifest(subject, output_root)
+    if trusted_manifest is not None and manifest != trusted_manifest:
+        raise ValueError("prediction manifest changed after the prediction-only phase")
     inputs, input_hashes = _subject_inputs(subject)
-    config_sha = _load_config()[2]
+    config, _, config_sha = _load_config()
     for name in ("body", "candidates", "strict", "rescue", "config"):
         recorded = (manifest.get("inputs", {}).get(name) or {}).get("sha256")
         current = input_hashes.get(name)
@@ -644,6 +715,24 @@ def score_subject(subject: Subject, output_root: Path) -> dict[str, Any]:
     v0_groups, v0_record = _load_v0_groups(
         subject.v0, strict, expected_sha256=v0_sha,
     )
+    if trusted_manifest is None:
+        # Standalone score mode has no in-memory prediction-phase witness, so
+        # rebuild both artifacts from fixed non-oracle inputs.  Replay mode
+        # instead compares the disk manifest with the object returned by its
+        # completed prediction-only phase, avoiding a second full F4 pass.
+        expected_strict, expected_rescue = _rebuild_relaxed_predictions(
+            inputs,
+            input_hashes,
+            _comparable_bodies(inputs["body"]),
+            config,
+        )
+        _verify_prediction_rebuild(
+            manifest,
+            strict_relaxed,
+            rescue_relaxed,
+            expected_strict,
+            expected_rescue,
+        )
     # This is the first point at which either oracle file is read.
     _assert_pinned_file(subject, "ground_truth", subject.ground_truth)
     _assert_pinned_file(subject, "linkage_audit", subject.linkage_audit)
@@ -712,10 +801,26 @@ def run_replay(
     subjects: Sequence[Subject], output_root: Path, mode: str,
 ) -> dict[str, Any]:
     output_root = Path(output_root).resolve()
-    if mode in {"predict", "replay"}:
+    if mode in {"predict", "score", "replay"}:
         _require_formal_runtime()
     case_reports: list[dict[str, Any]] = []
+    if mode == "replay":
+        # Finish every non-oracle prediction before scoring any subject.  If
+        # one prediction is refused, retain that prediction-phase result but
+        # still do not let an earlier oracle influence a later prediction.
+        prediction_reports = [
+            predict_subject(subject, output_root) for subject in subjects
+        ]
+        case_reports = [
+            score_subject(subject, output_root, trusted_manifest=prediction)
+            if prediction.get("status") == "predictions-built"
+            else prediction
+            for subject, prediction in zip(subjects, prediction_reports)
+        ]
+
     for subject in subjects:
+        if mode == "replay":
+            continue
         if mode == "dry-price":
             artifacts, hashes = _subject_inputs(subject)
             config, config_path, config_sha = _load_config()
@@ -739,11 +844,6 @@ def run_replay(
         if mode == "score":
             case_reports.append(score_subject(subject, output_root))
             continue
-        prediction = predict_subject(subject, output_root)
-        if prediction.get("status") != "predictions-built":
-            case_reports.append(prediction)
-            continue
-        case_reports.append(score_subject(subject, output_root))
     result: dict[str, Any] = {
         "schema_version": 1,
         "artifact": "callkin-real-relaxed-replay",

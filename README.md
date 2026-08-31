@@ -99,7 +99,7 @@ also writes `run.v1.families.rescue-relaxed.json`. Use `--candidates`,
 override these paths.
 
 This does not change a strict family. A singleton may attach provisionally to
-one strict core when a consensus3 candidate pair is a body `match`, while
+one strict core when a consensus2 candidate pair is a body `match`, while
 `unknown`, `abstain`, and missing comparisons do not veto it. A hard `reject`
 does veto it, and a singleton compatible with two cores stays ambiguous.
 Each attachment is scored separately, so two provisional members are never

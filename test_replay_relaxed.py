@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
+import tempfile
 from pathlib import Path
 
 import replay_relaxed as replay
@@ -46,6 +48,75 @@ def test_replay_scores_prediction_only_after_it_is_built():
     )
     assert report["strict"]["true_positive"] == 1
     assert report["strict_relaxed"]["true_positive"] == 3
+
+
+def test_replay_builds_all_subject_predictions_before_scoring_any_subject():
+    """Replay mode must have a prediction-only phase before its score phase."""
+    subjects = [
+        replay.Subject(
+            name,
+            Path("."),
+            *(Path("/does/not/exist") for _ in range(7)),
+        )
+        for name in ("first", "second")
+    ]
+    events = []
+    original_guard = replay._require_formal_runtime
+    original_predict = replay.predict_subject
+    original_score = replay.score_subject
+    replay._require_formal_runtime = lambda: None
+    replay.predict_subject = lambda subject, _root: (
+        events.append(("predict", subject.name))
+        or {"status": "predictions-built", "case": subject.name}
+    )
+    replay.score_subject = lambda subject, _root, **_kwargs: (
+        events.append(("score", subject.name))
+        or {"case": subject.name, "methods": {}}
+    )
+    try:
+        replay.run_replay(subjects, Path("/tmp/replay-order"), "replay")
+    finally:
+        replay._require_formal_runtime = original_guard
+        replay.predict_subject = original_predict
+        replay.score_subject = original_score
+    assert events == [
+        ("predict", "first"),
+        ("predict", "second"),
+        ("score", "first"),
+        ("score", "second"),
+    ]
+
+
+def test_replay_rejects_manifest_changed_after_prediction_phase():
+    """The replay fast path must bind scoring to its in-memory manifest."""
+    subject = replay.Subject(
+        "fake",
+        Path("."),
+        *(Path("/does/not/exist") for _ in range(7)),
+    )
+    trusted = {"status": "predictions-built", "case": "fake"}
+    original_load = replay._load_prediction_manifest
+    original_inputs = replay._subject_inputs
+    replay._load_prediction_manifest = lambda *_args: (
+        {**trusted, "case": "tampered"},
+        {},
+        {},
+    )
+    replay._subject_inputs = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("fixed inputs reached after manifest drift")
+    )
+    try:
+        try:
+            replay.score_subject(
+                subject, Path("/tmp/replay-manifest"), trusted_manifest=trusted
+            )
+        except ValueError as exc:
+            assert "changed after the prediction-only phase" in str(exc)
+        else:
+            raise AssertionError("changed replay manifest was accepted")
+    finally:
+        replay._load_prediction_manifest = original_load
+        replay._subject_inputs = original_inputs
 
 
 def test_micro_aggregate_sums_pair_counts_before_rounding():
@@ -321,10 +392,142 @@ def test_stale_prediction_or_v0_fails_before_oracle_json_loader():
     assert oracle_reads == []
 
 
+def test_jointly_tampered_prediction_and_manifest_fail_before_oracle():
+    """Updating mutable prediction digests must not make altered evidence valid."""
+    import test_v1_relaxed as fixtures
+
+    families = fixtures._families(provisional=(), unresolved=(fixtures.C,))
+    candidates = fixtures._consensus2(fixtures._candidate(fixtures.A, fixtures.C))
+    bodies = fixtures._bodies(fixtures.A, fixtures.B, fixtures.C)
+    rescue = fixtures._unchanged_rescue(families)
+    rescue_canonical_sha = fixtures._rescue_sha(rescue)
+    family_sha = "d" * 64
+    candidate_sha = "e" * 64
+    body_sha = "b" * 64
+    rescue_raw_sha = "f" * 64
+    config_sha = "c" * 64
+    config = fixtures._formal_config()
+    strict, f7 = replay.build_relaxed_artifacts(
+        families,
+        candidates,
+        bodies,
+        config,
+        family_artifact_sha256=family_sha,
+        candidate_artifact_sha256=candidate_sha,
+        rescue_artifact=rescue,
+        rescue_artifact_sha256=rescue_canonical_sha,
+        feature_provider=fixtures._match_features,
+    )
+    # This mutation is structurally valid under the old self-referential
+    # checks: provenance and manifest digests are updated together.
+    tampered_strict = copy.deepcopy(strict)
+    tampered_strict["provenance"]["relaxed_candidate_artifact_sha256"] = "a" * 64
+
+    with tempfile.TemporaryDirectory(prefix="replay-tamper-") as directory:
+        room = Path(directory)
+        strict_path = room / "strict.json"
+        f7_path = room / "f7.json"
+        manifest_path = room / "manifest.json"
+        strict_digest = replay.write_json(strict_path, tampered_strict)
+        f7_digest = replay.write_json(f7_path, f7)
+        replay.write_json(
+            manifest_path,
+            {
+                "status": "predictions-built",
+                "predictions": {
+                    "strict_relaxed": {"path": str(strict_path), "sha256": strict_digest},
+                    "strict_f7_relaxed": {"path": str(f7_path), "sha256": f7_digest},
+                },
+                "inputs": {
+                    "body": {"sha256": body_sha},
+                    "candidates": {"sha256": candidate_sha},
+                    "strict": {"sha256": family_sha},
+                    "rescue": {
+                        "sha256": rescue_raw_sha,
+                        "canonical_sha256": rescue_canonical_sha,
+                    },
+                    "config": {"sha256": config_sha},
+                },
+            },
+        )
+        subject = replay.Subject(
+            "fake",
+            room,
+            *(room / name for name in (
+                "body.json", "candidates.json", "strict.json", "rescue.json",
+                "ground_truth.json", "linkage.json", "v0.json",
+            )),
+        )
+        original_paths = replay._prediction_paths
+        original_inputs = replay._subject_inputs
+        original_config = replay._load_config
+        original_bodies = replay._comparable_bodies
+        original_pin = replay._assert_pinned_file
+        original_v0 = replay._load_v0_groups
+        original_read = replay.read_json
+        oracle_reads = []
+
+        replay._prediction_paths = lambda _subject, _root: (
+            strict_path, f7_path, manifest_path
+        )
+        replay._subject_inputs = lambda _subject: (
+            {
+                "body": {
+                    "functions": [
+                        {"id": member, "quality": {"complete_decode": True}}
+                        for member in (fixtures.A, fixtures.B, fixtures.C)
+                    ]
+                },
+                "candidates": candidates,
+                "strict": families,
+                "rescue": rescue,
+            },
+            {
+                "body": body_sha,
+                "candidates": candidate_sha,
+                "strict": family_sha,
+                "rescue": rescue_raw_sha,
+                "rescue_canonical": rescue_canonical_sha,
+            },
+        )
+        replay._comparable_bodies = lambda _payload: bodies
+        replay._load_config = lambda: (config, room / "config.json", config_sha)
+        replay._assert_pinned_file = lambda *_args: "1" * 64
+        replay._load_v0_groups = lambda *_args, **_kwargs: ([], {"path": "v0", "sha256": "1" * 64})
+
+        def spy_read(path):
+            if path in (subject.ground_truth, subject.linkage_audit):
+                oracle_reads.append(path)
+                raise AssertionError("oracle JSON opened before deterministic prediction verification")
+            return original_read(path)
+
+        replay.read_json = spy_read
+        try:
+            try:
+                replay.score_subject(subject, room)
+            except ValueError as exc:
+                assert "deterministic" in str(exc)
+            except AssertionError as exc:
+                raise AssertionError("tampered prediction reached the oracle") from exc
+            else:
+                raise AssertionError("jointly tampered prediction was accepted")
+        finally:
+            replay._prediction_paths = original_paths
+            replay._subject_inputs = original_inputs
+            replay._load_config = original_config
+            replay._comparable_bodies = original_bodies
+            replay._assert_pinned_file = original_pin
+            replay._load_v0_groups = original_v0
+            replay.read_json = original_read
+    assert oracle_reads == []
+
+
 if __name__ == "__main__":
     test_wsl_frozen_paths_translate_only_for_windows_runtime()
     test_oracle_metadata_may_omit_scope_but_not_conflict()
     test_replay_scores_prediction_only_after_it_is_built()
+    test_replay_builds_all_subject_predictions_before_scoring_any_subject()
+    test_replay_rejects_manifest_changed_after_prediction_phase()
     test_micro_aggregate_sums_pair_counts_before_rounding()
     test_crlf_rescue_uses_canonical_digest_for_f7_validation()
     test_frozen_input_pins_match_and_drift_is_rejected()
@@ -332,4 +535,5 @@ if __name__ == "__main__":
     test_direct_predict_subject_checks_formal_runtime_before_feature_work()
     test_stale_prediction_manifest_hash_is_rejected_before_scoring()
     test_stale_prediction_or_v0_fails_before_oracle_json_loader()
+    test_jointly_tampered_prediction_and_manifest_fail_before_oracle()
     print("test_replay_relaxed: PASS")
