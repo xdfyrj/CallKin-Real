@@ -203,11 +203,16 @@ def _assert_pinned_file(subject: Subject, name: str, path: Path) -> str:
     return digest
 
 
-def _metadata_match(*values: Mapping[str, Any]) -> None:
+def _metadata_match(
+    *values: Mapping[str, Any], allow_missing: set[str] | frozenset[str] = frozenset()
+) -> None:
     for key in ("case", "build", "profile", "scope"):
         observed = {item.get(key) for item in values}
+        if key in allow_missing:
+            observed.discard(None)
         if len(observed) != 1:
-            raise ValueError(f"frozen artifacts disagree on {key}: {sorted(observed)!r}")
+            display = sorted(repr(item) for item in observed)
+            raise ValueError(f"frozen artifacts disagree on {key}: {display!r}")
 
 
 def _subject_inputs(subject: Subject) -> tuple[dict[str, Any], dict[str, str]]:
@@ -644,7 +649,7 @@ def score_subject(subject: Subject, output_root: Path) -> dict[str, Any]:
     _assert_pinned_file(subject, "linkage_audit", subject.linkage_audit)
     ground_truth, gt_sha = read_json(subject.ground_truth)
     linkage, linkage_sha = read_json(subject.linkage_audit)
-    _metadata_match(strict, ground_truth, linkage)
+    _metadata_match(strict, ground_truth, linkage, allow_missing={"scope"})
     if ground_truth.get("provenance", {}).get("stripped_sha256") != strict.get("provenance", {}).get("stripped_sha256"):
         raise ValueError("ground truth and strict artifact describe different binaries")
     if linkage.get("provenance", {}).get("ground_truth_sha256") != gt_sha:
