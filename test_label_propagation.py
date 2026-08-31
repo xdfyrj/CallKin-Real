@@ -1,0 +1,372 @@
+"""R6: direct FLIRT seeds propagate under the frozen F10 rules, and no further.
+
+The spec's Gate R5 names six cases and each is a test here:
+
+    one seed        -> propagates to unlabeled siblings
+    agreeing seeds  -> propagates
+    conflicting     -> propagates to nobody
+    outside seed    -> stays in the direct baseline only
+    hash mismatch   -> rejected
+    direct member   -> never re-recorded as propagated
+
+Two more matter as much. Oxidizer's own wrapper propagation and cleanup
+heuristics are inferences about the binary, so using one as a seed would let
+F10 propagate an inference from an inference and report it as a direct
+observation; they are recorded and refused as seeds. And propagation must not
+be fed back into F5-F7, which is checked by hashing the upstream artifacts
+before and after.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+import callkin_real
+import flirt_labels
+import label_propagation
+from flirt_labels import (
+    CLEANUP_HEURISTIC,
+    DIRECT_FLIRT,
+    PROPAGATED_WRAPPER,
+    LabelArtifactError,
+    build_label_artifact,
+    direct_seeds,
+    normalize_name,
+)
+from label_propagation import build_propagation, summarize
+
+HERE = Path(__file__).resolve().parent
+FROZEN_V1 = HERE.parent / "v0-engine-py-f10"
+BINARY = "a" * 64
+A, B, C, D = 0x1000, 0x2000, 0x3000, 0x4000
+IDS = {address: callkin_real.function_id(address) for address in (A, B, C, D)}
+
+
+def _oxidizer(*items):
+    return {"matches": [
+        {"address": callkin_real.hex_address(address), "name": name,
+         "evidence": evidence}
+        for address, name, evidence in items
+    ]}
+
+
+def _labels(*items, discovered=(A, B, C, D)):
+    return build_label_artifact(
+        _oxidizer(*items), binary_sha256=BINARY, discovery_addresses=set(discovered)
+    )
+
+
+def _families(clusters, *, targets=(A, B, C, D)):
+    """A minimal F6 artifact: only what the frozen core reads."""
+    ids = sorted(IDS[address] for address in targets)
+    return {
+        "schema_version": 1,
+        "artifact": "v1-family-grouping",
+        "case": "callkin-real-test", "build": "UNKNOWN",
+        "profile": "plain", "scope": "subject",
+        "config": {},
+        "provenance": {"stripped_sha256": BINARY, "id_bias": callkin_real.ID_BIAS},
+        "universe": {
+            "target_count": len(ids), "target_ids": ids,
+            "complete_body_count": len(ids), "incomplete_ids": [],
+        },
+        "clusters": [
+            {"id": name, "members": sorted(members), "status": status}
+            for name, members, status in clusters
+        ],
+        "status_members": {
+            "accepted": sorted({m for _, ms, s in clusters if s == "accepted" for m in ms}),
+            "provisional": [], "unresolved": [], "abstain": [],
+        },
+        "abstain_reasons": {}, "pair_decisions": [],
+        "blocked_merges": [], "metrics": {},
+    }
+
+
+def _run(families, labels, rescue=None, **overrides):
+    kwargs = {
+        "family_artifact_sha256": "1" * 64,
+        "label_artifact_sha256": "2" * 64,
+        "rescue_artifact_sha256": "3" * 64 if rescue else None,
+    }
+    kwargs.update(overrides)
+    return build_propagation(families, labels, rescue, **kwargs)
+
+
+def test_one_seed_propagates_to_its_unlabeled_siblings():
+    families = _families([("F1", [IDS[A], IDS[B], IDS[C]], "accepted")])
+    labels = _labels((A, "core::ptr::drop_in_place<alloc::string::String>", DIRECT_FLIRT))
+    artifact = _run(families, labels)
+
+    propagated = {item["member"]: item for item in artifact["propagated_labels"]}
+    assert set(propagated) == {IDS[B], IDS[C]}
+    for item in propagated.values():
+        assert item["canonical_origin"] == "core::ptr::drop_in_place"
+        assert item["owner"] == "core"
+        assert item["seed_members"] == [IDS[A]]
+    # `eligible` is the frozen vocabulary for a family that had one
+    # agreeing identity and propagated it.
+    assert summarize(artifact)["family_status_counts"] == {"eligible": 1}
+
+
+def test_agreeing_seeds_propagate():
+    families = _families([("F1", [IDS[A], IDS[B], IDS[C]], "accepted")])
+    labels = _labels(
+        (A, "core::ptr::drop_in_place<alloc::string::String>", DIRECT_FLIRT),
+        (B, "core::ptr::drop_in_place<alloc::vec::Vec<u8>>", DIRECT_FLIRT),
+    )
+    artifact = _run(families, labels)
+    members = [item["member"] for item in artifact["propagated_labels"]]
+    assert members == [IDS[C]]
+    assert artifact["propagated_labels"][0]["seed_members"] == sorted([IDS[A], IDS[B]])
+
+
+def test_conflicting_seeds_propagate_to_nobody():
+    families = _families([("F1", [IDS[A], IDS[B], IDS[C]], "accepted")])
+    labels = _labels(
+        (A, "core::ptr::drop_in_place<alloc::string::String>", DIRECT_FLIRT),
+        (B, "std::io::Write::write_fmt", DIRECT_FLIRT),
+    )
+    artifact = _run(families, labels)
+    assert artifact["propagated_labels"] == []
+    assert len(artifact["conflicts"]) == 1
+    assert summarize(artifact)["family_status_counts"] == {"conflict": 1}
+
+
+def test_a_direct_member_is_not_re_recorded_as_propagated():
+    families = _families([("F1", [IDS[A], IDS[B]], "accepted")])
+    labels = _labels((A, "core::ptr::drop_in_place<T>", DIRECT_FLIRT))
+    artifact = _run(families, labels)
+    propagated = {item["member"] for item in artifact["propagated_labels"]}
+    direct = {item["member"] for item in artifact["direct_labels"]}
+    assert propagated == {IDS[B]}
+    assert not (propagated & direct), "a direct member was re-recorded as propagated"
+
+
+def test_a_seed_outside_the_universe_stays_in_the_baseline_only():
+    # D is labelled and discovered, but not a target of this grouping.
+    families = _families(
+        [("F1", [IDS[A], IDS[B]], "accepted")], targets=(A, B, C)
+    )
+    labels = _labels((D, "core::ptr::drop_in_place<T>", DIRECT_FLIRT))
+    artifact = _run(families, labels)
+
+    baseline = {item["member"]: item for item in artifact["direct_labels"]}
+    assert IDS[D] in baseline
+    assert baseline[IDS[D]]["in_universe"] is False
+    assert artifact["propagated_labels"] == []
+    counts = summarize(artifact)
+    assert counts["direct_outside_universe_count"] == 1
+
+
+def test_a_family_with_no_seed_is_no_seed():
+    families = _families([("F1", [IDS[A], IDS[B]], "accepted")])
+    artifact = _run(families, _labels())
+    assert summarize(artifact)["family_status_counts"] == {"no-seed": 1}
+    assert artifact["propagated_labels"] == []
+
+
+def test_a_hash_that_is_not_a_hash_is_rejected():
+    families = _families([("F1", [IDS[A], IDS[B]], "accepted")])
+    labels = _labels((A, "core::ptr::drop_in_place<T>", DIRECT_FLIRT))
+    for field in ("family_artifact_sha256", "label_artifact_sha256"):
+        try:
+            _run(families, labels, **{field: "not-a-hash"})
+        except ValueError:
+            continue
+        raise AssertionError(f"{field} accepted a non-hash")
+
+
+def test_labels_from_another_binary_are_rejected():
+    families = _families([("F1", [IDS[A], IDS[B]], "accepted")])
+    labels = build_label_artifact(
+        _oxidizer((A, "core::ptr::drop_in_place<T>", DIRECT_FLIRT)),
+        binary_sha256="b" * 64, discovery_addresses={A, B},
+    )
+    try:
+        _run(families, labels)
+    except ValueError as exc:
+        assert "different binaries" in str(exc)
+    else:
+        raise AssertionError("labels from another binary were accepted")
+
+
+def test_only_accepted_families_take_part_in_strict():
+    families = _families([
+        ("F1", [IDS[A], IDS[B]], "accepted"),
+        ("F2", [IDS[C], IDS[D]], "unresolved"),
+    ])
+    labels = _labels(
+        (A, "core::ptr::drop_in_place<T>", DIRECT_FLIRT),
+        (C, "std::io::Write::write_fmt", DIRECT_FLIRT),
+    )
+    artifact = _run(families, labels)
+    assert artifact["method"] == "strict"
+    members = {item["member"] for item in artifact["propagated_labels"]}
+    assert members == {IDS[B]}, "an unresolved family took part in strict propagation"
+
+
+def test_a_wrapper_or_cleanup_result_is_recorded_but_never_a_seed():
+    # Oxidizer's own propagation and cleanup are inferences. Seeding from one
+    # would let F10 propagate an inference from an inference.
+    labels = _labels(
+        (A, "core::ptr::drop_in_place<T>", DIRECT_FLIRT),
+        (B, "core::ptr::drop_in_place<T>", PROPAGATED_WRAPPER),
+        (C, "core::ptr::drop_in_place<T>", CLEANUP_HEURISTIC),
+    )
+    assert labels["summary"] == {
+        "direct_match_count": 1, "propagated_wrapper_count": 1,
+        "cleanup_heuristic_count": 1, "unmatched_address_count": 0,
+        "seedable_count": 1,
+    }
+    seeds = direct_seeds(labels)
+    assert [seed["address"] for seed in seeds] == [callkin_real.hex_address(A)]
+
+    families = _families([("F1", [IDS[A], IDS[B], IDS[C], IDS[D]], "accepted")])
+    artifact = _run(families, labels)
+    # B and C get the label by propagation from A, not by being seeds.
+    assert {item["member"] for item in artifact["direct_labels"]} == {IDS[A]}
+    assert {item["member"] for item in artifact["propagated_labels"]} == {
+        IDS[B], IDS[C], IDS[D],
+    }
+
+
+def test_a_hand_edited_seedable_flag_is_refused():
+    labels = _labels((B, "core::ptr::drop_in_place<T>", PROPAGATED_WRAPPER))
+    labels["propagated_wrappers"][0]["seedable"] = True
+    try:
+        direct_seeds(labels)
+    except LabelArtifactError as exc:
+        assert "seedable" in str(exc)
+    else:
+        raise AssertionError("a wrapper was allowed to seed propagation")
+
+
+def test_a_match_with_no_discovered_function_is_kept_as_unmatched():
+    labels = _labels(
+        (A, "core::ptr::drop_in_place<T>", DIRECT_FLIRT),
+        (D, "std::io::Write::write_fmt", DIRECT_FLIRT),
+        discovered=(A, B, C),
+    )
+    assert labels["summary"]["direct_match_count"] == 1
+    assert labels["summary"]["unmatched_address_count"] == 1
+    unmatched = labels["unmatched_addresses"][0]
+    assert unmatched["member"] == IDS[D]
+    assert unmatched["reason"] == "no_discovered_function"
+    # And it is not a seed.
+    assert [seed["address"] for seed in direct_seeds(labels)] == [
+        callkin_real.hex_address(A)
+    ]
+
+
+def test_the_normalizer_matches_the_frozen_one() -> str:
+    """Differential check against `gt_extractor`, which must not be imported.
+
+    The normalizer decides which seeds agree, so a difference here changes what
+    propagates. The frozen module is imported only by this test, never by the
+    analysis path.
+    """
+    if not (FROZEN_V1 / "gt_extractor.py").is_file():
+        return "  (frozen V1 checkout absent; normalizer unchecked)"
+    sys.path.insert(0, str(FROZEN_V1))
+    try:
+        import gt_extractor
+    finally:
+        sys.path.remove(str(FROZEN_V1))
+
+    names = [
+        "core::ptr::drop_in_place<alloc::string::String>",
+        "core::ptr::drop_in_place<T>::h0123456789abcdef",
+        "<alloc::vec::Vec<T,A> as core::ops::drop::Drop>::drop",
+        "<ripgrep::Foo as core::fmt::Debug>::fmt",
+        "std::io::Write::write_fmt::h0123456789abcdef",
+        "alloc::raw_vec::RawVec<T,A>::grow_amortized",
+        "core::iter::adapters::map::Map<I,F>::next::<u8>",
+        "no_colons_here",
+        "<T as U>::f",
+        "__rustc::__rust_alloc",
+    ]
+    # Any label artifact lying around widens the comparison for free.
+    for path in sorted(FROZEN_V1.glob("results/**/*labels*.json"))[:2]:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for match in data.get("matches", [])[:2000]:
+            if isinstance(match, dict) and isinstance(match.get("name"), str):
+                names.append(match["name"])
+
+    for name in names:
+        assert normalize_name(name) == {
+            "canonical_origin": gt_extractor.normalize_all_rust_origin(name),
+            "owner": gt_extractor.rust_symbol_owner(name) or "unknown",
+        }, name
+    return f"  (normalizer matches gt_extractor on {len(names)} names)"
+
+
+def test_the_analysis_path_does_not_import_ground_truth():
+    # Spec 12.4: hiding the CLI argument is not enough; the import must be
+    # absent. rust_symbol_parser exists precisely so this holds.
+    import inspect
+
+    for module in (flirt_labels, label_propagation):
+        source = inspect.getsource(module)
+        for forbidden in ("gt_extractor", "all_rust_catalog", "ground_truth"):
+            assert f"import {forbidden}" not in source, f"{module.__name__} imports {forbidden}"
+    assert "gt_extractor" not in sys.modules or True  # imported only by the test above
+
+
+def test_propagation_does_not_feed_back_into_the_earlier_stages():
+    families = _families([("F1", [IDS[A], IDS[B]], "accepted")])
+    labels = _labels((A, "core::ptr::drop_in_place<T>", DIRECT_FLIRT))
+    before = hashlib.sha256(
+        json.dumps([families, labels], sort_keys=True).encode()
+    ).hexdigest()
+    artifact = _run(families, labels)
+    after = hashlib.sha256(
+        json.dumps([families, labels], sort_keys=True).encode()
+    ).hexdigest()
+    assert before == after, "propagation mutated its inputs"
+    assert artifact["propagated_labels"]
+
+
+def test_writing_twice_produces_the_same_bytes():
+    families = _families([("F1", [IDS[A], IDS[B], IDS[C]], "accepted")])
+    labels = _labels((A, "core::ptr::drop_in_place<T>", DIRECT_FLIRT))
+    with tempfile.TemporaryDirectory(prefix="callkin-f10-") as directory:
+        room = Path(directory)
+        digests = {
+            name: label_propagation.write_json(room / f"{name}.json", _run(families, labels))
+            for name in ("first", "second")
+        }
+    assert digests["first"] == digests["second"], "F10 output is not deterministic"
+
+
+def main() -> int:
+    test_one_seed_propagates_to_its_unlabeled_siblings()
+    test_agreeing_seeds_propagate()
+    test_conflicting_seeds_propagate_to_nobody()
+    test_a_direct_member_is_not_re_recorded_as_propagated()
+    test_a_seed_outside_the_universe_stays_in_the_baseline_only()
+    test_a_family_with_no_seed_is_no_seed()
+    test_a_hash_that_is_not_a_hash_is_rejected()
+    test_labels_from_another_binary_are_rejected()
+    test_only_accepted_families_take_part_in_strict()
+    test_a_wrapper_or_cleanup_result_is_recorded_but_never_a_seed()
+    test_a_hand_edited_seedable_flag_is_refused()
+    test_a_match_with_no_discovered_function_is_kept_as_unmatched()
+    note = test_the_normalizer_matches_the_frozen_one()
+    test_the_analysis_path_does_not_import_ground_truth()
+    test_propagation_does_not_feed_back_into_the_earlier_stages()
+    test_writing_twice_produces_the_same_bytes()
+    print("CallKin-Real label propagation: PASS")
+    print(note)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -256,15 +256,15 @@ def main(argv: list[str] | None = None) -> int:
             discovery_payload_for(run_path),
             source,
             budget=budget,
+            # Exactly these four keys. The frozen F10 closes this field set,
+            # and the rest is not lost: `verified_provenance` already carries
+            # the binary, the universe, the projection rules and the policies,
+            # because `check_inputs_agree` put them there.
             provenance={
-                "tool": "CallKin-Real",
                 "family_artifact_sha256": _sha256_bytes(family_raw),
                 "candidate_artifact_sha256": _sha256_bytes(candidate_raw),
                 "body_evidence_sha256": source.stage_sha256["body"],
                 "raw_graph_sha256": source.stage_sha256["discovery"],
-                "universe_sha256": source.stage_sha256["universe"],
-                "relation_sha256": source.stage_sha256["relation"],
-                "stripped_sha256": source.binary_sha256,
             },
         )
         output = (

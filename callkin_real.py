@@ -1515,6 +1515,35 @@ def main(argv: list[str] | None = None) -> int:
         }
         if args.trace:
             result["trace"] = traces
+        # The label artifact is written beside the stage files, never inside
+        # them. Spec 7.6 keeps Oxidizer's four stages apart because only
+        # `matches` may seed propagation.
+        if flirt:
+            from flirt_labels import build_label_artifact
+
+            label_artifact = build_label_artifact(
+                {"matches": [
+                    {**match, "evidence": match.get("evidence", "direct-flirt")}
+                    for match in flirt.values()
+                ]},
+                binary_sha256=binary_sha256,
+                # The discovery universe, not the grouping universe. A label on
+                # an import is a real join; whether it may seed propagation is
+                # a separate question the frozen F10 answers with in_universe,
+                # and answering it twice would count the same exclusion twice.
+                # An opaque target is an anchor CallKin-Real invented, not a
+                # function it found, so a label there is genuinely unmatched.
+                discovery_addresses={
+                    address for address, function in functions.items()
+                    if function.kind != "opaque"
+                },
+            )
+            label_path = output.parent / f"{output.stem}.labels.direct.json"
+            result["labels_artifact"] = {
+                "path": label_path.name,
+                "sha256": write_json(label_path, label_artifact),
+                "summary": label_artifact["summary"],
+            }
         write_json(output, result)
         print(json.dumps({
             "output": str(output),

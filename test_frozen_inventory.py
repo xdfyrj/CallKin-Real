@@ -25,6 +25,8 @@ STUBS = {
     "engine.py": "the V0 engine: the relation partition comes from relation.json",
     "loader.py": "projected fixtures do not exist for a real stripped binary",
     "build_manifest.py": "only sha256_file is needed; the rest parses build manifests",
+    "graph_projector.py": "only function_id; the rest projects a fixture from build knowledge",
+    "oxidizer_adapter.py": "imports gt_extractor, which spec 12.4 forbids in the analysis path",
 }
 TRACKED_SUFFIXES = (".py", ".json", ".gz")
 
@@ -81,8 +83,10 @@ def test_each_stub_says_why_it_refuses():
     for name in STUBS:
         text = (FROZEN_DIR / name).read_text(encoding="utf-8")
         assert "stub" in text.lower() or "only" in text.lower(), name
-    # The two that must refuse at call time, rather than merely be smaller.
-    for name in ("engine.py", "loader.py"):
+    # The ones that must refuse at call time, rather than merely be smaller.
+    # build_manifest.py and graph_projector.py each keep one pure function that
+    # is genuinely needed, so they are the exceptions.
+    for name in ("engine.py", "loader.py", "oxidizer_adapter.py"):
         assert "NotImplementedError" in (FROZEN_DIR / name).read_text(encoding="utf-8")
 
 
