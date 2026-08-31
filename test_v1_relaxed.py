@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import copy
 
+from body_similarity import FunctionBody
+
 
 A, B, C, D, E = (f"FUN_0010{value:04x}" for value in range(1, 6))
 
@@ -30,7 +32,13 @@ def _evaluation(left, right, decision, source):
     }
 
 
-def _families(*evaluations, second_core=False, provisional=(C,)):
+def _families(
+    *evaluations,
+    second_core=False,
+    provisional=(C,),
+    unresolved=(),
+    abstain=(),
+):
     accepted = [A, B] + ([D, E] if second_core else [])
     clusters = [
         {"id": "F1", "status": "accepted", "members": [A, B]},
@@ -43,7 +51,11 @@ def _families(*evaluations, second_core=False, provisional=(C,)):
         {"id": f"P{index}", "status": "provisional", "members": [member]}
         for index, member in enumerate(provisional, 1)
     )
-    targets = accepted + list(provisional)
+    clusters.extend(
+        {"id": f"U{index}", "status": "unresolved", "members": [member]}
+        for index, member in enumerate(unresolved, 1)
+    )
+    targets = accepted + list(provisional) + list(unresolved) + list(abstain)
     return {
         "schema_version": 1,
         "artifact": "v1-family-grouping",
@@ -64,21 +76,234 @@ def _families(*evaluations, second_core=False, provisional=(C,)):
         "universe": {
             "target_count": len(targets),
             "target_ids": sorted(targets),
-            "complete_body_count": len(targets),
-            "incomplete_ids": [],
+            "complete_body_count": len(targets) - len(abstain),
+            "incomplete_ids": sorted(abstain),
         },
         "clusters": clusters,
         "status_members": {
             "accepted": sorted(accepted),
             "provisional": sorted(provisional),
-            "unresolved": [],
-            "abstain": [],
+            "unresolved": sorted(unresolved),
+            "abstain": sorted(abstain),
         },
         "abstain_reasons": {},
         "pair_decisions": list(evaluations),
         "blocked_merges": [],
         "metrics": {},
     }
+
+
+def _candidate(left, right):
+    left, right = sorted((left, right))
+    return {
+        "pair": [left, right],
+        "first": left,
+        "second": right,
+        "reasons": ["cfg_top_k", "relation_top_k"],
+        "views": {
+            "cfg": {"rank": 1, "score": 1.0},
+            "relation": {"rank": 1, "score": 1.0},
+            "token": None,
+        },
+        "last_shared_round": 0,
+        "same_out_signature": True,
+        "same_in_signature": True,
+        "same_final_color": False,
+        "same_prior_color": True,
+    }
+
+
+def _consensus2(*pairs, targets=(A, B, C)):
+    return {
+        "schema_version": 2,
+        "artifact": "v1-multiview-candidate-pairs",
+        "case": "test",
+        "build": "UNKNOWN",
+        "profile": "plain",
+        "scope": "subject",
+        "config": {
+            "top_k": 16,
+            "view_top_k": {"cfg": 16, "relation": 16, "token": 16},
+            "views": ["token", "cfg", "relation"],
+            "view_profiles": {
+                "cfg": "cfg-v2-digested-topology",
+                "relation": "relation-v3-anchor-class-context",
+                "token": "token-v2-no-sequence",
+            },
+        },
+        "provenance": {
+            "stripped_sha256": "a" * 64,
+            "body_evidence_sha256": "b" * 64,
+            "candidate_derivation": {
+                "kind": "minimum-view-consensus",
+                "minimum_view_count": 2,
+            },
+        },
+        "universe": {
+            "target_count": len(targets),
+            "complete_body_count": len(targets),
+            "incomplete_ids": [],
+            "target_ids": sorted(targets),
+        },
+        "pairs": sorted(pairs, key=lambda item: item["pair"]),
+    }
+
+
+def _body(function_id):
+    return FunctionBody(
+        id=function_id,
+        size=1,
+        instructions=({"mnemonic": "ret", "constants": [1], "slots": []},),
+        edges=(),
+        blocks=({"label": "B0", "instruction_indices": [0]},),
+        quality={"complete_decode": True, "opaque_indirect_jumps": 0},
+    )
+
+
+def _match_features(pair):
+    from v1_engine import PairFeatures
+
+    return PairFeatures(
+        pair=pair,
+        structure_score=1.0,
+        aligned_instruction_ratio=1.0,
+        sequence_ratio=1.0,
+        mnemonic_multiset_jaccard=1.0,
+        constant_similarity=1.0,
+        call_shape_similarity=None,
+        data_reference_similarity=None,
+        same_final_color=False,
+        same_prior_color=True,
+        same_out_signature=True,
+        same_in_signature=True,
+        both_complete=True,
+        opaque_indirect_jumps=0,
+    )
+
+
+def _formal_config(**overrides):
+    import dataclasses
+    from v1_engine import PairPolicyConfig
+
+    config = PairPolicyConfig.from_file("frozen_v1/configs/v1.formal.json")
+    return dataclasses.replace(config, **overrides)
+
+
+def test_evaluate_relaxed_pairs_returns_shared_decisions_and_accounting():
+    families = _families(provisional=(), unresolved=(C,))
+    evaluations, accounting = _module().evaluate_relaxed_pairs(
+        families,
+        _consensus2(_candidate(A, C)),
+        {member: _body(member) for member in (A, B, C)},
+        _formal_config(),
+        {"strict-core": {"F1": (A, B)}},
+        feature_provider=_match_features,
+    )
+    decisions = {
+        tuple(item.pair.to_list()): (item.decision, item.source)
+        for item in evaluations
+    }
+    assert decisions == {
+        tuple(sorted((A, C))): ("match", "candidate"),
+        tuple(sorted((B, C))): ("match", "on-demand"),
+    }
+    assert accounting["required_comparisons"] == 2
+    assert accounting["required_alignment_cells"] == 2
+    assert accounting["total_detailed_comparisons"] == 2
+
+
+def test_unresolved_member_uses_a_consensus2_candidate_match():
+    families = _families(provisional=(), unresolved=(C,))
+    strict, after_f7 = _module().build_relaxed_artifacts(
+        families,
+        _consensus2(_candidate(A, C)),
+        {member: _body(member) for member in (A, B, C)},
+        _formal_config(),
+        family_artifact_sha256="d" * 64,
+        candidate_artifact_sha256="e" * 64,
+        feature_provider=_match_features,
+    )
+    assert [item["member"] for item in strict["attachments"]] == [C]
+    assert strict["summary"]["candidate_member_count"] == 1
+    assert after_f7 is None
+
+
+def test_abstain_member_is_not_a_relaxed_candidate():
+    calls = []
+
+    def features(pair):
+        calls.append(pair)
+        return _match_features(pair)
+
+    strict, _ = _module().build_relaxed_artifacts(
+        _families(provisional=(), abstain=(C,)),
+        _consensus2(_candidate(A, C)),
+        {member: _body(member) for member in (A, B)},
+        _formal_config(),
+        family_artifact_sha256="d" * 64,
+        candidate_artifact_sha256="e" * 64,
+        feature_provider=features,
+    )
+    assert strict["summary"]["candidate_member_count"] == 0
+    assert strict["attachments"] == []
+    assert calls == []
+
+
+def test_on_demand_match_without_candidate_match_does_not_attach():
+    import dataclasses
+
+    candidate_pair = tuple(sorted((A, C)))
+
+    def features(pair):
+        matched = _match_features(pair)
+        if (pair.left, pair.right) == candidate_pair:
+            return dataclasses.replace(matched, structure_score=0.90)
+        return matched
+
+    strict, _ = _module().build_relaxed_artifacts(
+        _families(provisional=(), unresolved=(C,)),
+        _consensus2(_candidate(A, C)),
+        {member: _body(member) for member in (A, B, C)},
+        _formal_config(),
+        family_artifact_sha256="d" * 64,
+        candidate_artifact_sha256="e" * 64,
+        feature_provider=features,
+    )
+    decisions = {
+        tuple(item["pair"]): (item["decision"], item["source"])
+        for item in strict["pair_decisions"]
+    }
+    assert decisions[tuple(sorted((A, C)))] == ("unknown", "candidate")
+    assert decisions[tuple(sorted((B, C)))] == ("match", "on-demand")
+    assert strict["attachments"] == []
+    assert strict["unassigned_members"] == [C]
+
+
+def test_relaxed_budget_is_checked_before_any_comparison_runs():
+    calls = []
+
+    def features(pair):
+        calls.append(pair)
+        return _match_features(pair)
+
+    families = _families(provisional=(), unresolved=(C,))
+    before = copy.deepcopy(families)
+    try:
+        _module().build_relaxed_artifacts(
+            families,
+            _consensus2(_candidate(A, C)),
+            {member: _body(member) for member in (A, B, C)},
+            _formal_config(max_comparison_count=1),
+            family_artifact_sha256="d" * 64,
+            candidate_artifact_sha256="e" * 64,
+            feature_provider=features,
+        )
+    except ValueError as exc:
+        assert "exceeds the formal comparison budget" in str(exc)
+    else:
+        raise AssertionError("relaxed comparisons started beyond the frozen budget")
+    assert calls == []
+    assert families == before
 
 
 def test_unknown_does_not_veto_one_strong_core_attachment():
@@ -299,6 +524,11 @@ def test_relaxed_artifact_is_refused_as_a_flirt_propagation_partition():
 
 
 def main() -> int:
+    test_evaluate_relaxed_pairs_returns_shared_decisions_and_accounting()
+    test_unresolved_member_uses_a_consensus2_candidate_match()
+    test_abstain_member_is_not_a_relaxed_candidate()
+    test_on_demand_match_without_candidate_match_does_not_attach()
+    test_relaxed_budget_is_checked_before_any_comparison_runs()
     test_unknown_does_not_veto_one_strong_core_attachment()
     test_a_hard_reject_vetoes_the_attachment()
     test_an_on_demand_match_is_not_independent_retrieval_support()
