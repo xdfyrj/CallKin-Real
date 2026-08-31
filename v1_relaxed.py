@@ -92,6 +92,14 @@ def _digest(value: str, where: str) -> str:
     return value
 
 
+def _canonical_artifact_sha256(value: Mapping[str, Any]) -> str:
+    """Hash the canonical JSON bytes emitted by the artifact writers."""
+    encoded = (
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _partition_records(
     cores: Mapping[str, Sequence[str]],
 ) -> list[dict[str, Any]]:
@@ -244,6 +252,9 @@ def validate_rescue_partition(
     _digest(rescue_sha, "rescue_artifact_sha256")
     if not isinstance(rescue, Mapping):
         raise ValueError("rescue artifact must be an object")
+    actual_rescue_sha = _canonical_artifact_sha256(rescue)
+    if actual_rescue_sha != rescue_sha:
+        raise ValueError("rescue artifact SHA-256 does not match its contents")
     candidate_digest = (
         _digest(candidate_sha, "candidate_artifact_sha256")
         if candidate_sha is not None

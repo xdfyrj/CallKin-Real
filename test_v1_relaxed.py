@@ -8,6 +8,8 @@ own expected result.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 
 from body_similarity import FunctionBody
 
@@ -21,6 +23,13 @@ def _module():
     except ModuleNotFoundError as exc:
         raise AssertionError("v1_relaxed.py has not been implemented") from exc
     return v1_relaxed
+
+
+def _rescue_sha(rescue):
+    encoded = (
+        json.dumps(rescue, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _evaluation(left, right, decision, source):
@@ -214,7 +223,7 @@ def _rescue_that_merges_the_two_cores(families):
     }
 
 
-def _build_two_core_variants(rescue):
+def _build_two_core_variants(rescue, *, rescue_sha=None, feature_provider=None):
     families = _two_core_families(C)
     return _module().build_relaxed_artifacts(
         families,
@@ -228,8 +237,10 @@ def _build_two_core_variants(rescue):
         family_artifact_sha256="d" * 64,
         candidate_artifact_sha256="e" * 64,
         rescue_artifact=rescue,
-        rescue_artifact_sha256="f" * 64,
-        feature_provider=_match_features,
+        rescue_artifact_sha256=(
+            _rescue_sha(rescue) if rescue_sha is None else rescue_sha
+        ),
+        feature_provider=feature_provider or _match_features,
     )
 
 
@@ -254,7 +265,7 @@ def _expect_rescue_rejected(rescue, message):
             family_artifact_sha256="d" * 64,
             candidate_artifact_sha256="e" * 64,
             rescue_artifact=rescue,
-            rescue_artifact_sha256="f" * 64,
+            rescue_artifact_sha256=_rescue_sha(rescue),
             feature_provider=features,
         )
     except ValueError as exc:
@@ -310,6 +321,7 @@ def _unchanged_rescue(families):
 
 def _build_two_attachment_variants():
     families = _families(provisional=(), unresolved=(C, D))
+    rescue = _unchanged_rescue(families)
     return _module().build_relaxed_artifacts(
         families,
         _consensus2(
@@ -321,8 +333,8 @@ def _build_two_attachment_variants():
         _formal_config(),
         family_artifact_sha256="d" * 64,
         candidate_artifact_sha256="e" * 64,
-        rescue_artifact=_unchanged_rescue(families),
-        rescue_artifact_sha256="f" * 64,
+        rescue_artifact=rescue,
+        rescue_artifact_sha256=_rescue_sha(rescue),
         feature_provider=_match_features,
     )
 
@@ -382,7 +394,7 @@ def test_f7_merge_can_turn_two_strict_cores_into_one_attachment_target():
         family_artifact_sha256="d" * 64,
         candidate_artifact_sha256="e" * 64,
         rescue_artifact=rescue,
-        rescue_artifact_sha256="f" * 64,
+        rescue_artifact_sha256=_rescue_sha(rescue),
         feature_provider=_match_features,
     )
     assert "rescue_artifact_sha256" not in strict["provenance"]
@@ -486,10 +498,10 @@ def test_f7_scoring_requires_the_validated_rescue_and_actual_hash():
             families,
             family_artifact_sha256="d" * 64,
             rescue_artifact=wrong_rescue,
-            rescue_artifact_sha256="f" * 64,
+            rescue_artifact_sha256=_rescue_sha(wrong_rescue),
         )
     except ValueError as exc:
-        assert "partition" in str(exc)
+        assert "rescue artifact" in str(exc)
     else:
         raise AssertionError("F7 artifact was scored with a wrong rescue object")
 
@@ -498,9 +510,87 @@ def test_f7_scoring_requires_the_validated_rescue_and_actual_hash():
         families,
         family_artifact_sha256="d" * 64,
         rescue_artifact=rescue,
-        rescue_artifact_sha256="f" * 64,
+        rescue_artifact_sha256=_rescue_sha(rescue),
     )
     assert sorted(groups) == sorted([[A, B, D, E], [A, B, C, D, E]])
+
+    tampered_core = copy.deepcopy(after_f7)
+    tampered_core["core_partition"][0]["members"] = [A, B]
+    try:
+        _module().groups_for_scoring(
+            tampered_core,
+            families,
+            family_artifact_sha256="d" * 64,
+            rescue_artifact=rescue,
+            rescue_artifact_sha256=_rescue_sha(rescue),
+        )
+    except ValueError as exc:
+        assert "core_partition" in str(exc)
+    else:
+        raise AssertionError("F7 artifact with a drifted core partition was accepted")
+
+
+def test_build_rejects_stale_rescue_digest_before_comparison_runs():
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    stale_sha = _rescue_sha(rescue)
+    rescue["summary"]["tampered"] = True
+    calls = []
+
+    def features(pair):
+        calls.append(pair)
+        return _match_features(pair)
+
+    try:
+        _build_two_core_variants(
+            rescue, rescue_sha=stale_sha, feature_provider=features
+        )
+    except ValueError as exc:
+        assert "SHA-256" in str(exc)
+    else:
+        raise AssertionError("stale rescue digest was accepted during build")
+    assert calls == []
+
+
+def test_scoring_rejects_stale_rescue_digest():
+    families = _two_core_families(C)
+    rescue = _rescue_that_merges_the_two_cores(families)
+    _, after_f7 = _build_two_core_variants(rescue)
+    stale_sha = _rescue_sha(rescue)
+    rescue["summary"]["tampered"] = True
+    try:
+        _module().groups_for_scoring(
+            after_f7,
+            families,
+            family_artifact_sha256="d" * 64,
+            rescue_artifact=rescue,
+            rescue_artifact_sha256=stale_sha,
+        )
+    except ValueError as exc:
+        assert "SHA-256" in str(exc)
+    else:
+        raise AssertionError("stale rescue digest was accepted during scoring")
+
+
+def test_rescue_digest_matches_repository_writer_encoding():
+    import v1_rescue
+
+    class MemoryParent:
+        def mkdir(self, *, parents, exist_ok):
+            assert parents and exist_ok
+
+    class MemoryPath:
+        parent = MemoryParent()
+
+        def write_bytes(self, data):
+            self.data = data
+            return len(data)
+
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    path = MemoryPath()
+    assert v1_rescue.write_json(path, rescue) == _rescue_sha(rescue)
+    assert path.data == (
+        json.dumps(rescue, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode("utf-8")
 
 
 def test_rescue_from_another_strict_hash_is_refused():
@@ -534,7 +624,7 @@ def test_two_attachments_never_create_a_pair_between_singletons():
         if artifact["partition"] == "f7-core":
             rescue_kwargs = {
                 "rescue_artifact": rescue,
-                "rescue_artifact_sha256": "f" * 64,
+                "rescue_artifact_sha256": _rescue_sha(rescue),
             }
         groups = _module().groups_for_scoring(
             artifact,
@@ -1027,6 +1117,9 @@ def main() -> int:
     test_rescue_provenance_mismatches_are_refused_before_comparison_runs()
     test_rescue_schema_missing_or_extra_fields_is_refused_before_comparison_runs()
     test_f7_scoring_requires_the_validated_rescue_and_actual_hash()
+    test_build_rejects_stale_rescue_digest_before_comparison_runs()
+    test_scoring_rejects_stale_rescue_digest()
+    test_rescue_digest_matches_repository_writer_encoding()
     test_evaluate_relaxed_pairs_returns_shared_decisions_and_accounting()
     test_unresolved_member_uses_a_consensus2_candidate_match()
     test_abstain_member_is_not_a_relaxed_candidate()
