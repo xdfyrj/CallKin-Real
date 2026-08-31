@@ -13,8 +13,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from collections.abc import Sequence
 from typing import Any, Callable, Mapping
@@ -1234,6 +1236,13 @@ def groups_for_scoring(
     rescue_artifact_sha256: str | None = None,
 ) -> list[list[str]]:
     """Validate the artifact and return strict plus one-member hypotheses."""
+    has_rescue_input = (
+        rescue_artifact is not None or rescue_artifact_sha256 is not None
+    )
+    if has_rescue_input and artifact.get("rule_version") != F7_RULE_VERSION:
+        raise ValueError(
+            "F7 relaxed scoring requires an f7-core relaxed artifact"
+        )
     if artifact.get("rule_version") in (STRICT_RULE_VERSION, F7_RULE_VERSION):
         if (
             artifact.get("rule_version") == F7_RULE_VERSION
@@ -1279,13 +1288,150 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def write_json(path: Path, value: Any) -> str:
-    encoded = (
+def _encode_json(value: Any) -> bytes:
+    return (
         json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     ).encode("utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(encoded)
+
+
+def _stage_bytes(path: Path, data: bytes) -> None:
+    with path.open("wb") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _reserve_sibling(path: Path, suffix: str) -> Path:
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=suffix, dir=str(path.parent)
+    )
+    os.close(descriptor)
+    reserved = Path(name)
+    reserved.unlink()
+    return reserved
+
+
+def _exists(path: Path) -> bool:
+    return os.path.lexists(os.fspath(path))
+
+
+def _same_output_path(first: Path, second: Path) -> bool:
+    try:
+        if first.resolve(strict=False) == second.resolve(strict=False):
+            return True
+    except (OSError, RuntimeError):
+        if os.path.abspath(os.fspath(first)) == os.path.abspath(os.fspath(second)):
+            return True
+    if _exists(first) and _exists(second):
+        try:
+            return os.path.samefile(first, second)
+        except OSError:
+            return False
+    return False
+
+
+def _cleanup(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # Cleanup is best effort after a failed transaction; the original
+        # publish error is more useful than masking it with a second failure.
+        pass
+
+
+def _publish_json_files(entries: list[tuple[Path, bytes]]) -> None:
+    """Publish one or more complete JSON files as one recoverable transaction."""
+    paths = [Path(path) for path, _ in entries]
+    if len(paths) != len(set(paths)):
+        # This catches equal lexical paths before touching their parents.
+        raise ValueError("relaxed output paths must be distinct")
+    for index, path in enumerate(paths):
+        if any(_same_output_path(path, other) for other in paths[index + 1:]):
+            raise ValueError("relaxed output paths must not collide")
+        path.parent.mkdir(parents=True, exist_ok=True)
+    devices = {os.stat(path.parent).st_dev for path in paths}
+    if len(devices) != 1:
+        raise ValueError("relaxed output paths must share a filesystem")
+
+    records = [
+        {
+            "target": path,
+            "data": data,
+            "stage": None,
+            "backup": None,
+            "old_exists": _exists(path),
+            "backup_moved": False,
+        }
+        for path, data in entries
+    ]
+    try:
+        # Stage every byte before moving an existing output or publishing any
+        # new output. Each stage is a sibling, so os.replace cannot cross a
+        # filesystem boundary.
+        for record in records:
+            stage = _reserve_sibling(record["target"], ".stage")
+            record["stage"] = stage
+            _stage_bytes(stage, record["data"])
+
+        for record in records:
+            target = record["target"]
+            if record["old_exists"]:
+                backup = _reserve_sibling(target, ".backup")
+                record["backup"] = backup
+                try:
+                    os.replace(target, backup)
+                except Exception:
+                    # A replace shim can fail after moving its source; retain
+                    # that backup only when the target is actually gone.
+                    if not _exists(target) and _exists(backup):
+                        record["backup_moved"] = True
+                    raise
+                record["backup_moved"] = True
+            os.replace(record["stage"], target)
+    except Exception:
+        # Restore in reverse order. A backup is authoritative even if an
+        # os.replace call raised after moving its source.
+        for record in reversed(records):
+            target = record["target"]
+            backup = record["backup"]
+            if record["backup_moved"] and backup is not None and _exists(backup):
+                _cleanup(target)
+                try:
+                    os.replace(backup, target)
+                except OSError:
+                    pass
+            elif not record["old_exists"] and _exists(target):
+                _cleanup(target)
+        raise
+    finally:
+        for record in records:
+            _cleanup(record["stage"])
+            _cleanup(record["backup"])
+
+
+def write_json(path: Path, value: Any) -> str:
+    encoded = _encode_json(value)
+    _publish_json_files([(Path(path), encoded)])
     return _sha256(encoded)
+
+
+def write_json_pair(
+    first_path: Path,
+    first_value: Any,
+    second_path: Path,
+    second_value: Any,
+) -> tuple[str, str]:
+    first_encoded = _encode_json(first_value)
+    second_encoded = _encode_json(second_value)
+    _publish_json_files([
+        (Path(first_path), first_encoded),
+        (Path(second_path), second_encoded),
+    ])
+    return _sha256(first_encoded), _sha256(second_encoded)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -1371,7 +1517,6 @@ def main(argv: list[str] | None = None) -> int:
             if args.output
             else run_path.parent / f"{run_path.stem}.v1.families.relaxed.json"
         )
-        strict_digest = write_json(output, strict_artifact)
         rescue_output = None
         rescue_digest = None
         if rescue_relaxed is not None:
@@ -1381,7 +1526,14 @@ def main(argv: list[str] | None = None) -> int:
                 else run_path.parent
                 / f"{run_path.stem}.v1.families.rescue-relaxed.json"
             )
-            rescue_digest = write_json(rescue_output, rescue_relaxed)
+            strict_digest, rescue_digest = write_json_pair(
+                output,
+                strict_artifact,
+                rescue_output,
+                rescue_relaxed,
+            )
+        else:
+            strict_digest = write_json(output, strict_artifact)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

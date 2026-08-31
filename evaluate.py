@@ -276,12 +276,20 @@ def score_grouping(
                 raise EvaluationError(
                     "an F7 relaxed artifact requires the rescue artifact and its SHA-256"
                 )
+        rescue_for_scoring = (
+            rescue if method == "v1_strict_rescue_relaxed_provisional" else None
+        )
+        rescue_sha_for_scoring = (
+            rescue_artifact_sha256
+            if method == "v1_strict_rescue_relaxed_provisional"
+            else None
+        )
         groups = v1_relaxed.groups_for_scoring(
             artifact,
             families,
             family_artifact_sha256=family_artifact_sha256,
-            rescue_artifact=rescue,
-            rescue_artifact_sha256=rescue_artifact_sha256,
+            rescue_artifact=rescue_for_scoring,
+            rescue_artifact_sha256=rescue_sha_for_scoring,
         )
         partition = artifact.get(
             "partition",

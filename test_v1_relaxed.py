@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import tempfile
 
 from body_similarity import FunctionBody
 
@@ -1123,6 +1124,37 @@ def test_evaluator_reports_both_relaxed_variants_separately():
     assert methods["v1_relaxed_provisional"]["partition"] == "strict-core"
     assert methods["v1_strict_rescue_relaxed_provisional"]["partition"] == "f7-core"
 
+    substituted = copy.deepcopy(strict_relaxed)
+    try:
+        evaluate.score_grouping(
+            ground_truth,
+            universe,
+            relation,
+            families,
+            rescue,
+            {},
+            rescue_relaxed=substituted,
+            family_artifact_sha256="d" * 64,
+            rescue_artifact_sha256=_rescue_sha(rescue),
+        )
+    except ValueError as exc:
+        assert "F7" in str(exc) or "f7-core" in str(exc)
+    else:
+        raise AssertionError("strict relaxed output was accepted as F7 relaxed")
+
+    try:
+        _module().groups_for_scoring(
+            substituted,
+            families,
+            family_artifact_sha256="d" * 64,
+            rescue_artifact=rescue,
+            rescue_artifact_sha256=_rescue_sha(rescue),
+        )
+    except ValueError as exc:
+        assert "F7" in str(exc) or "f7-core" in str(exc)
+    else:
+        raise AssertionError("strict relaxed output bypassed the F7 scoring gate")
+
 
 def test_relaxed_artifact_is_refused_as_a_flirt_propagation_partition():
     from flirt_labels import build_label_artifact
@@ -1227,6 +1259,281 @@ def _json_bytes(value):
     ).encode("utf-8")
 
 
+def test_relaxed_json_pair_rejects_colliding_paths_atomically():
+    from pathlib import Path
+
+    import v1_relaxed
+
+    with tempfile.TemporaryDirectory(prefix="callkin-relaxed-") as directory:
+        path = Path(directory) / "same.json"
+        try:
+            v1_relaxed.write_json_pair(path, {"value": 1}, path, {"value": 2})
+        except ValueError as exc:
+            assert "output paths" in str(exc)
+        else:
+            raise AssertionError("colliding relaxed output paths were accepted")
+        assert not path.exists()
+
+
+def test_relaxed_json_pair_rolls_back_when_second_stage_write_fails():
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import v1_relaxed
+
+    with tempfile.TemporaryDirectory(prefix="callkin-relaxed-") as directory:
+        strict_path = Path(directory) / "strict.json"
+        f7_path = Path(directory) / "f7.json"
+        old_strict = b"old strict\n"
+        old_f7 = b"old f7\n"
+        strict_path.write_bytes(old_strict)
+        f7_path.write_bytes(old_f7)
+        real_stage = v1_relaxed._stage_bytes
+        calls = []
+
+        def stage(path, data):
+            calls.append(path)
+            if len(calls) == 2:
+                raise OSError("injected second-stage write failure")
+            return real_stage(path, data)
+
+        try:
+            with patch.object(v1_relaxed, "_stage_bytes", side_effect=stage):
+                v1_relaxed.write_json_pair(
+                    strict_path,
+                    {"value": "new strict"},
+                    f7_path,
+                    {"value": "new f7"},
+                )
+        except OSError as exc:
+            assert "second-stage" in str(exc)
+        else:
+            raise AssertionError("second-stage write failure was swallowed")
+        assert strict_path.read_bytes() == old_strict
+        assert f7_path.read_bytes() == old_f7
+        assert not list(Path(directory).glob(".*.stage"))
+        assert not list(Path(directory).glob(".*.backup"))
+
+
+def test_relaxed_json_pair_rolls_back_when_second_publish_fails():
+    import os
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import v1_relaxed
+
+    with tempfile.TemporaryDirectory(prefix="callkin-relaxed-") as directory:
+        strict_path = Path(directory) / "strict.json"
+        f7_path = Path(directory) / "f7.json"
+        old_strict = b"old strict\n"
+        old_f7 = b"old f7\n"
+        strict_path.write_bytes(old_strict)
+        f7_path.write_bytes(old_f7)
+        real_replace = os.replace
+        publishes = []
+
+        def replace(source, destination):
+            source_path = Path(source)
+            destination_path = Path(destination)
+            if source_path.name.endswith(".stage") and destination_path in {
+                strict_path,
+                f7_path,
+            }:
+                publishes.append(destination_path)
+                if len(publishes) == 2:
+                    raise OSError("injected second publish failure")
+            return real_replace(source, destination)
+
+        try:
+            with patch.object(v1_relaxed.os, "replace", side_effect=replace):
+                v1_relaxed.write_json_pair(
+                    strict_path,
+                    {"value": "new strict"},
+                    f7_path,
+                    {"value": "new f7"},
+                )
+        except OSError as exc:
+            assert "second publish" in str(exc)
+        else:
+            raise AssertionError("second publish failure was swallowed")
+        assert strict_path.read_bytes() == old_strict
+        assert f7_path.read_bytes() == old_f7
+        assert not list(Path(directory).glob(".*.stage"))
+        assert not list(Path(directory).glob(".*.backup"))
+
+
+def test_relaxed_single_json_write_is_atomic_on_stage_failure():
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import v1_relaxed
+
+    with tempfile.TemporaryDirectory(prefix="callkin-relaxed-") as directory:
+        path = Path(directory) / "strict.json"
+        old = b"old strict\n"
+        path.write_bytes(old)
+        with patch.object(
+            v1_relaxed,
+            "_stage_bytes",
+            side_effect=OSError("injected single-stage write failure"),
+        ):
+            try:
+                v1_relaxed.write_json(path, {"value": "new"})
+            except OSError as exc:
+                assert "single-stage" in str(exc)
+            else:
+                raise AssertionError("single-output stage failure was swallowed")
+        assert path.read_bytes() == old
+        assert not list(Path(directory).glob(".*.stage"))
+        assert not list(Path(directory).glob(".*.backup"))
+
+
+def _real_cli_fixture(directory):
+    from pathlib import Path
+
+    families = _two_core_families(C)
+    candidates = _consensus2(
+        _candidate(A, C),
+        _candidate(D, C),
+        targets=(A, B, C, D, E),
+    )
+    rescue = _rescue_that_merges_the_two_cores(families)
+    family_raw = _json_bytes(families)
+    candidate_raw = _json_bytes(candidates)
+    rescue["provenance"]["family_artifact_sha256"] = hashlib.sha256(
+        family_raw
+    ).hexdigest()
+    rescue["provenance"]["candidate_artifact_sha256"] = hashlib.sha256(
+        candidate_raw
+    ).hexdigest()
+    rescue_raw = _json_bytes(rescue)
+    run_path = Path(directory) / "run.json"
+    config_path = Path(directory) / "formal.json"
+    family_path = Path(directory) / "run.v1.families.strict.json"
+    candidate_path = Path(directory) / "run.v1.consensus2.k16.candidates.json"
+    rescue_path = Path(directory) / "run.v1.families.rescue.json"
+    strict_path = Path(directory) / "strict-relaxed.json"
+    f7_path = Path(directory) / "f7-relaxed.json"
+    run_path.write_bytes(_json_bytes({"binary": {"sha256": "a" * 64}}))
+    config_path.write_bytes(_json_bytes(_formal_config().to_dict()))
+    family_path.write_bytes(family_raw)
+    candidate_path.write_bytes(candidate_raw)
+    rescue_path.write_bytes(rescue_raw)
+    source = type("Source", (), {
+        "binary_sha256": "a" * 64,
+        "bodies": _bodies(A, B, C, D, E),
+    })()
+    return (
+        run_path,
+        config_path,
+        rescue_path,
+        strict_path,
+        f7_path,
+        source,
+    )
+
+
+def _run_real_relaxed_cli(paths, source, *, patcher):
+    import contextlib
+    import io
+    from unittest.mock import patch
+
+    import v1_relaxed
+
+    run_path, config_path, rescue_path, strict_path, f7_path, _ = paths
+    output = io.StringIO()
+    errors = io.StringIO()
+    args = [
+        str(run_path),
+        "--config", str(config_path),
+        "--rescue", str(rescue_path),
+        "--output", str(strict_path),
+        "--rescue-output", str(f7_path),
+    ]
+    with patch.object(v1_relaxed, "load_from_run", return_value=source), \
+            patcher, \
+            contextlib.redirect_stdout(output), \
+            contextlib.redirect_stderr(errors):
+        code = v1_relaxed.main(args)
+    return code, output.getvalue(), errors.getvalue()
+
+
+def test_relaxed_cli_pair_rolls_back_when_second_stage_write_fails():
+    from unittest.mock import patch
+
+    import v1_relaxed
+
+    with tempfile.TemporaryDirectory(prefix="callkin-relaxed-cli-") as directory:
+        paths = _real_cli_fixture(directory)
+        _, _, _, strict_path, f7_path, source = paths
+        old_strict = b"old strict cli\n"
+        old_f7 = b"old f7 cli\n"
+        strict_path.write_bytes(old_strict)
+        f7_path.write_bytes(old_f7)
+        real_stage = v1_relaxed._stage_bytes
+        calls = []
+
+        def stage(path, data):
+            calls.append(path)
+            if len(calls) == 2:
+                raise OSError("injected CLI second-stage write failure")
+            return real_stage(path, data)
+
+        code, _, errors = _run_real_relaxed_cli(
+            paths,
+            source,
+            patcher=patch.object(v1_relaxed, "_stage_bytes", side_effect=stage),
+        )
+        assert code == 1
+        assert "CLI second-stage" in errors
+        assert strict_path.read_bytes() == old_strict
+        assert f7_path.read_bytes() == old_f7
+        assert not list(strict_path.parent.glob(".*.stage"))
+        assert not list(strict_path.parent.glob(".*.backup"))
+
+
+def test_relaxed_cli_pair_rolls_back_when_second_publish_fails():
+    import os
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import v1_relaxed
+
+    with tempfile.TemporaryDirectory(prefix="callkin-relaxed-cli-") as directory:
+        paths = _real_cli_fixture(directory)
+        _, _, _, strict_path, f7_path, source = paths
+        old_strict = b"old strict cli\n"
+        old_f7 = b"old f7 cli\n"
+        strict_path.write_bytes(old_strict)
+        f7_path.write_bytes(old_f7)
+        real_replace = os.replace
+        publishes = []
+
+        def replace(source_path, destination):
+            source_name = Path(source_path).name
+            destination_path = Path(destination)
+            if source_name.endswith(".stage") and destination_path in {
+                strict_path,
+                f7_path,
+            }:
+                publishes.append(destination_path)
+                if len(publishes) == 2:
+                    raise OSError("injected CLI second publish failure")
+            return real_replace(source_path, destination)
+
+        code, _, errors = _run_real_relaxed_cli(
+            paths,
+            source,
+            patcher=patch.object(v1_relaxed.os, "replace", side_effect=replace),
+        )
+        assert code == 1
+        assert "CLI second publish" in errors
+        assert strict_path.read_bytes() == old_strict
+        assert f7_path.read_bytes() == old_f7
+        assert not list(strict_path.parent.glob(".*.stage"))
+        assert not list(strict_path.parent.glob(".*.backup"))
+
+
 def _run_relaxed_cli(files, source):
     import contextlib
     import io
@@ -1239,6 +1546,18 @@ def _run_relaxed_cli(files, source):
     output = io.StringIO()
     errors = io.StringIO()
     config = _formal_config()
+
+    def write(path, value):
+        data = _json_bytes(value)
+        _MemoryPath.writes[str(path)] = data
+        return hashlib.sha256(data).hexdigest()
+
+    def write_pair(first_path, first_value, second_path, second_value):
+        return (
+            write(first_path, first_value),
+            write(second_path, second_value),
+        )
+
     with patch.object(v1_relaxed, "Path", _MemoryPath), \
             patch.object(v1_relaxed, "load_from_run", return_value=source), \
             patch.object(
@@ -1246,6 +1565,8 @@ def _run_relaxed_cli(files, source):
                 "from_file",
                 return_value=config,
             ), \
+            patch.object(v1_relaxed, "write_json", side_effect=write), \
+            patch.object(v1_relaxed, "write_json_pair", side_effect=write_pair), \
             contextlib.redirect_stdout(output), \
             contextlib.redirect_stderr(errors):
         code = v1_relaxed.main(["run.json", "--config", "formal.json"])
@@ -1387,6 +1708,12 @@ def main() -> int:
     test_relaxed_cli_writes_paired_outputs_and_preserves_input_provenance()
     test_relaxed_cli_omits_f7_output_when_rescue_is_absent()
     test_relaxed_cli_rejects_rescue_built_from_another_strict_artifact()
+    test_relaxed_json_pair_rejects_colliding_paths_atomically()
+    test_relaxed_json_pair_rolls_back_when_second_stage_write_fails()
+    test_relaxed_json_pair_rolls_back_when_second_publish_fails()
+    test_relaxed_single_json_write_is_atomic_on_stage_failure()
+    test_relaxed_cli_pair_rolls_back_when_second_stage_write_fails()
+    test_relaxed_cli_pair_rolls_back_when_second_publish_fails()
     print("CallKin-Real relaxed V1: PASS")
     return 0
 
