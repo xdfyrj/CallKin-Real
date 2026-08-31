@@ -1368,6 +1368,7 @@ def _publish_json_files(entries: list[tuple[Path, bytes]]) -> None:
         }
         for path, data in entries
     ]
+    preserved_backups: set[Path] = set()
     try:
         # Stage every byte before moving an existing output or publishing any
         # new output. Each stage is a sibling, so os.replace cannot cross a
@@ -1392,9 +1393,10 @@ def _publish_json_files(entries: list[tuple[Path, bytes]]) -> None:
                     raise
                 record["backup_moved"] = True
             os.replace(record["stage"], target)
-    except Exception:
+    except Exception as publication_error:
         # Restore in reverse order. A backup is authoritative even if an
         # os.replace call raised after moving its source.
+        rollback_failures: list[tuple[Path, Exception]] = []
         for record in reversed(records):
             target = record["target"]
             backup = record["backup"]
@@ -1402,15 +1404,27 @@ def _publish_json_files(entries: list[tuple[Path, bytes]]) -> None:
                 _cleanup(target)
                 try:
                     os.replace(backup, target)
-                except OSError:
-                    pass
+                except Exception as rollback_error:
+                    preserved_backups.add(backup)
+                    rollback_failures.append((backup, rollback_error))
             elif not record["old_exists"] and _exists(target):
                 _cleanup(target)
+        if rollback_failures:
+            paths = ", ".join(str(path) for path in sorted(preserved_backups, key=str))
+            failures = "; ".join(
+                f"{path}: {error}" for path, error in rollback_failures
+            )
+            raise RuntimeError(
+                "relaxed output publication failed after "
+                f"{publication_error}; rollback failed ({failures}); "
+                f"preserved backup(s): {paths}"
+            ) from publication_error
         raise
     finally:
         for record in records:
             _cleanup(record["stage"])
-            _cleanup(record["backup"])
+            if record.get("backup") not in preserved_backups:
+                _cleanup(record["backup"])
 
 
 def write_json(path: Path, value: Any) -> str:

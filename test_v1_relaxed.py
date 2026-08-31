@@ -1362,6 +1362,52 @@ def test_relaxed_json_pair_rolls_back_when_second_publish_fails():
         assert not list(Path(directory).glob(".*.backup"))
 
 
+def test_relaxed_json_pair_preserves_backup_when_rollback_restore_fails():
+    import os
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import v1_relaxed
+
+    with tempfile.TemporaryDirectory(prefix="callkin-relaxed-") as directory:
+        strict_path = Path(directory) / "strict.json"
+        f7_path = Path(directory) / "f7.json"
+        old_strict = b"old strict\n"
+        old_f7 = b"old f7\n"
+        strict_path.write_bytes(old_strict)
+        f7_path.write_bytes(old_f7)
+        real_replace = os.replace
+
+        def replace(source, destination):
+            source_path = Path(source)
+            destination_path = Path(destination)
+            if source_path.name.endswith(".stage") and destination_path == f7_path:
+                raise OSError("injected second publish failure")
+            if source_path.name.endswith(".backup") and destination_path == strict_path:
+                raise OSError("injected strict rollback restore failure")
+            return real_replace(source, destination)
+
+        try:
+            with patch.object(v1_relaxed.os, "replace", side_effect=replace):
+                v1_relaxed.write_json_pair(
+                    strict_path,
+                    {"value": "new strict"},
+                    f7_path,
+                    {"value": "new f7"},
+                )
+        except RuntimeError as exc:
+            message = str(exc)
+            assert "injected second publish failure" in message
+            assert "preserved backup" in message
+        else:
+            raise AssertionError("rollback restoration failure was swallowed")
+        backups = list(Path(directory).glob(".*.backup"))
+        assert len(backups) == 1
+        assert backups[0].read_bytes() == old_strict
+        assert str(backups[0]) in message
+        assert not list(Path(directory).glob(".*.stage"))
+
+
 def test_relaxed_single_json_write_is_atomic_on_stage_failure():
     from pathlib import Path
     from unittest.mock import patch
@@ -1711,6 +1757,7 @@ def main() -> int:
     test_relaxed_json_pair_rejects_colliding_paths_atomically()
     test_relaxed_json_pair_rolls_back_when_second_stage_write_fails()
     test_relaxed_json_pair_rolls_back_when_second_publish_fails()
+    test_relaxed_json_pair_preserves_backup_when_rollback_restore_fails()
     test_relaxed_single_json_write_is_atomic_on_stage_failure()
     test_relaxed_cli_pair_rolls_back_when_second_stage_write_fails()
     test_relaxed_cli_pair_rolls_back_when_second_publish_fails()
