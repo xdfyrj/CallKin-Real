@@ -149,6 +149,101 @@ def _consensus2(*pairs, targets=(A, B, C)):
     }
 
 
+def _bodies(*members):
+    return {member: _body(member) for member in members}
+
+
+def _two_core_families(singleton=C):
+    return _families(second_core=True, provisional=(), unresolved=(singleton,))
+
+
+def _rescue_that_merges_the_two_cores(families):
+    return {
+        "artifact": "v1-family-rescue",
+        "schema_version": 1,
+        "rescue_rule_version": "f7-rescue-v1",
+        "case": families["case"],
+        "build": families["build"],
+        "profile": families["profile"],
+        "scope": families["scope"],
+        "ground_truth": {"used_for": "not used"},
+        "provenance": {
+            "family_artifact_sha256": "d" * 64,
+            "candidate_artifact_sha256": "e" * 64,
+            "body_evidence_sha256": families["provenance"]["body_evidence_sha256"],
+            "raw_graph_sha256": "f" * 64,
+        },
+        "strict_partition": [
+            {"id": "F1", "members": [A, B]},
+            {"id": "F2", "members": [D, E]},
+        ],
+        "final_partition": [
+            {"id": "F1+F2", "members": [A, B, D, E], "origin": "rescued"},
+        ],
+    }
+
+
+def _build_two_core_variants(rescue):
+    families = _two_core_families(C)
+    return _module().build_relaxed_artifacts(
+        families,
+        _consensus2(
+            _candidate(A, C),
+            _candidate(D, C),
+            targets=(A, B, C, D, E),
+        ),
+        _bodies(A, B, C, D),
+        _formal_config(),
+        family_artifact_sha256="d" * 64,
+        candidate_artifact_sha256="e" * 64,
+        rescue_artifact=rescue,
+        rescue_artifact_sha256="f" * 64,
+        feature_provider=_match_features,
+    )
+
+
+def _unchanged_rescue(families):
+    return {
+        "artifact": "v1-family-rescue",
+        "schema_version": 1,
+        "rescue_rule_version": "f7-rescue-v1",
+        "case": families["case"],
+        "build": families["build"],
+        "profile": families["profile"],
+        "scope": families["scope"],
+        "ground_truth": {"used_for": "not used"},
+        "provenance": {
+            "family_artifact_sha256": "d" * 64,
+            "candidate_artifact_sha256": "e" * 64,
+            "body_evidence_sha256": families["provenance"]["body_evidence_sha256"],
+            "raw_graph_sha256": "f" * 64,
+        },
+        "strict_partition": [{"id": "F1", "members": [A, B]}],
+        "final_partition": [
+            {"id": "F1", "members": [A, B], "origin": "strict"},
+        ],
+    }
+
+
+def _build_two_attachment_variants():
+    families = _families(provisional=(), unresolved=(C, D))
+    return _module().build_relaxed_artifacts(
+        families,
+        _consensus2(
+            _candidate(A, C),
+            _candidate(A, D),
+            targets=(A, B, C, D),
+        ),
+        _bodies(A, B, C, D),
+        _formal_config(),
+        family_artifact_sha256="d" * 64,
+        candidate_artifact_sha256="e" * 64,
+        rescue_artifact=_unchanged_rescue(families),
+        rescue_artifact_sha256="f" * 64,
+        feature_provider=_match_features,
+    )
+
+
 def _body(function_id):
     return FunctionBody(
         id=function_id,
@@ -187,6 +282,60 @@ def _formal_config(**overrides):
 
     config = PairPolicyConfig.from_file("frozen_v1/configs/v1.formal.json")
     return dataclasses.replace(config, **overrides)
+
+
+def test_f7_merge_can_turn_two_strict_cores_into_one_attachment_target():
+    families = _two_core_families(C)
+    rescue = _rescue_that_merges_the_two_cores(families)
+    strict, after_f7 = _module().build_relaxed_artifacts(
+        families,
+        _consensus2(
+            _candidate(A, C),
+            _candidate(D, C),
+            targets=(A, B, C, D, E),
+        ),
+        _bodies(A, B, C, D),
+        _formal_config(),
+        family_artifact_sha256="d" * 64,
+        candidate_artifact_sha256="e" * 64,
+        rescue_artifact=rescue,
+        rescue_artifact_sha256="f" * 64,
+        feature_provider=_match_features,
+    )
+    assert strict["summary"]["ambiguous_member_count"] == 1
+    assert after_f7["summary"]["attached_member_count"] == 1
+
+
+def test_rescue_from_another_strict_hash_is_refused():
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    rescue["provenance"]["family_artifact_sha256"] = "0" * 64
+    try:
+        _build_two_core_variants(rescue)
+    except ValueError as exc:
+        assert "another strict" in str(exc)
+    else:
+        raise AssertionError("a rescue from another strict run was accepted")
+
+
+def test_rescue_strict_partition_drift_is_refused():
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    rescue["strict_partition"][0]["members"] = [A]
+    try:
+        _build_two_core_variants(rescue)
+    except ValueError as exc:
+        assert "strict_partition" in str(exc)
+    else:
+        raise AssertionError("a drifted strict partition was accepted")
+
+
+def test_two_attachments_never_create_a_pair_between_singletons():
+    families = _families(provisional=(), unresolved=(C, D))
+    strict, after_f7 = _build_two_attachment_variants()
+    for artifact in (strict, after_f7):
+        groups = _module().groups_for_scoring(
+            artifact, families, family_artifact_sha256="d" * 64
+        )
+        assert [A, B, C, D] not in groups
 
 
 def test_evaluate_relaxed_pairs_returns_shared_decisions_and_accounting():
@@ -436,8 +585,8 @@ def test_unsupported_rescue_input_is_rejected_before_comparison_runs():
             rescue_artifact_sha256="f" * 64,
             feature_provider=features,
         )
-    except NotImplementedError as exc:
-        assert "F7" in str(exc)
+    except ValueError as exc:
+        assert "rescue artifact" in str(exc)
     else:
         raise AssertionError("unsupported rescue input was evaluated")
     assert calls == []
@@ -661,6 +810,7 @@ def test_relaxed_artifact_is_refused_as_a_flirt_propagation_partition():
 
 
 def main() -> int:
+    test_f7_merge_can_turn_two_strict_cores_into_one_attachment_target()
     test_evaluate_relaxed_pairs_returns_shared_decisions_and_accounting()
     test_unresolved_member_uses_a_consensus2_candidate_match()
     test_abstain_member_is_not_a_relaxed_candidate()

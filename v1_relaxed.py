@@ -1,10 +1,11 @@
-"""Attach uncertain singleton fragments to strict F6 cores, provisionally.
+"""Attach uncertain singleton fragments to strict/F7 cores, provisionally.
 
 This is deliberately a post-processing experiment.  It never changes the
 strict family artifact and its output is not accepted by label propagation.
 One consensus2 candidate MATCH supplies positive evidence; UNKNOWN and
 ABSTAIN do not veto it, while REJECT does.  A member compatible with more than
-one strict core stays ambiguous.
+one core stays ambiguous.  A validated F7 final partition is handled as a
+separate evaluation-only variant.
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ from v1_engine import (  # noqa: E402
 ARTIFACT = "v1-provisional-attachments"
 SCHEMA_VERSION = 1
 RULE_VERSION = "strict-core-attachment-v1"
+STRICT_RULE_VERSION = "consensus2-strict-core-attachment-v2"
+F7_RULE_VERSION = "consensus2-f7-core-attachment-v2"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _DECISIONS = {"match", "reject", "unknown", "abstain"}
 _SOURCES = {"candidate", "on-demand"}
@@ -55,6 +58,232 @@ def _digest(value: str, where: str) -> str:
     if not isinstance(value, str) or not _SHA256.fullmatch(value):
         raise ValueError(f"{where} must be a SHA-256 digest")
     return value
+
+
+def _partition_records(
+    cores: Mapping[str, Sequence[str]],
+) -> list[dict[str, Any]]:
+    return [
+        {"id": identifier, "members": list(members)}
+        for identifier, members in sorted(cores.items())
+    ]
+
+
+def _partition_mapping(
+    records: Any,
+    *,
+    where: str,
+    min_members: int = 2,
+) -> dict[str, tuple[str, ...]]:
+    if not isinstance(records, list):
+        raise ValueError(f"{where} must be a list")
+    cores: dict[str, tuple[str, ...]] = {}
+    seen: set[str] = set()
+    for index, item in enumerate(records):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"{where}[{index}] is invalid")
+        identifier = item.get("id")
+        members = item.get("members")
+        if (
+            not isinstance(identifier, str)
+            or not identifier
+            or identifier in cores
+            or not isinstance(members, list)
+            or len(members) < min_members
+            or any(not isinstance(member, str) or not member for member in members)
+            or len(set(members)) != len(members)
+            or seen.intersection(members)
+        ):
+            raise ValueError(f"{where}[{index}] is invalid")
+        cores[identifier] = tuple(sorted(members))
+        seen.update(members)
+    return cores
+
+
+def _validate_rescue_provenance(
+    rescue: Mapping[str, Any],
+    family_artifact: Mapping[str, Any],
+    candidate_artifact: Mapping[str, Any],
+    family_sha: str,
+    candidate_sha: str,
+    rescue_sha: str | None = None,
+) -> None:
+    provenance = rescue.get("provenance")
+    if not isinstance(provenance, Mapping):
+        raise ValueError("rescue artifact provenance is missing")
+
+    declared_rescue_sha = provenance.get("rescue_artifact_sha256")
+    if declared_rescue_sha is not None:
+        _digest(declared_rescue_sha, "rescue provenance.rescue_artifact_sha256")
+        if rescue_sha is not None and declared_rescue_sha != rescue_sha:
+            raise ValueError("rescue artifact SHA-256 does not match its provenance")
+
+    family_recorded = provenance.get("family_artifact_sha256")
+    if family_recorded != family_sha:
+        raise ValueError("rescue was built from another strict family artifact")
+    _digest(family_recorded, "rescue provenance.family_artifact_sha256")
+
+    # F7's writer records these three upstream hashes.  Check every one that
+    # is present while retaining compatibility with the small control
+    # fixtures used by the frozen rescue tests.
+    candidate_recorded = provenance.get("candidate_artifact_sha256")
+    if candidate_recorded is not None:
+        _digest(candidate_recorded, "rescue provenance.candidate_artifact_sha256")
+        if candidate_recorded != candidate_sha:
+            raise ValueError("rescue was built from another candidate artifact")
+
+    family_provenance = family_artifact.get("provenance")
+    candidate_provenance = candidate_artifact.get("provenance")
+    if not isinstance(family_provenance, Mapping) or not isinstance(
+        candidate_provenance, Mapping
+    ):
+        raise ValueError("rescue upstream provenance is missing")
+    for key in ("stripped_sha256", "body_evidence_sha256"):
+        expected = family_provenance.get(key)
+        if expected is None:
+            continue
+        expected = _digest(expected, f"strict provenance.{key}")
+        candidate_expected = candidate_provenance.get(key)
+        if candidate_expected is not None and _digest(
+            candidate_expected, f"candidate provenance.{key}"
+        ) != expected:
+            raise ValueError(f"strict/candidate {key} mismatch")
+        recorded = provenance.get(key)
+        if recorded is not None and _digest(
+            recorded, f"rescue provenance.{key}"
+        ) != expected:
+            raise ValueError(f"family/rescue provenance mismatch on {key}")
+
+    for key in (
+        "raw_graph_sha256",
+        "candidate_selection_sha256",
+        "projection_config_sha256",
+    ):
+        recorded = provenance.get(key)
+        expected = family_provenance.get(key)
+        if expected is None:
+            expected = candidate_provenance.get(key)
+        if recorded is not None and expected is not None:
+            if _digest(recorded, f"rescue provenance.{key}") != _digest(
+                expected, f"upstream provenance.{key}"
+            ):
+                raise ValueError(f"family/rescue provenance mismatch on {key}")
+
+    for key, value in provenance.items():
+        if key.endswith("_sha256"):
+            _digest(value, f"rescue provenance.{key}")
+
+    verified = rescue.get("verified_provenance")
+    if verified is not None:
+        if not isinstance(verified, Mapping):
+            raise ValueError("rescue verified_provenance is invalid")
+        target_count = verified.get("target_count")
+        target_ids = family_artifact.get("universe", {}).get("target_ids")
+        if target_count is not None and target_count != len(target_ids or []):
+            raise ValueError("family/rescue target_count mismatch")
+        for key in (
+            "stripped_sha256",
+            "body_evidence_sha256",
+            "raw_graph_sha256",
+            "candidate_selection_sha256",
+            "projection_config_sha256",
+            "anchor_policy",
+            "edge_policy",
+        ):
+            if key in verified and key in family_provenance:
+                if verified[key] != family_provenance[key]:
+                    raise ValueError(f"family/rescue provenance mismatch on {key}")
+
+
+def validate_rescue_partition(
+    families: Mapping[str, Any],
+    rescue: Mapping[str, Any],
+    family_sha: str,
+    rescue_sha: str,
+    candidate_sha: str | None = None,
+    *,
+    candidate_artifact: Mapping[str, Any] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Validate one complete F7 result and return its final core partition."""
+    strict_sha = _digest(family_sha, "family_artifact_sha256")
+    _digest(rescue_sha, "rescue_artifact_sha256")
+    if not isinstance(rescue, Mapping):
+        raise ValueError("rescue artifact must be an object")
+    if rescue.get("artifact") != "v1-family-rescue":
+        raise ValueError("expected a v1-family-rescue artifact")
+    if rescue.get("schema_version") not in (None, 1):
+        raise ValueError("unsupported v1 family rescue artifact")
+    for key in ("case", "build", "profile", "scope"):
+        if rescue.get(key) != families.get(key):
+            raise ValueError(f"family and rescue artifacts disagree on {key}")
+
+    candidate_digest = (
+        _digest(candidate_sha, "candidate_artifact_sha256")
+        if candidate_sha is not None
+        else None
+    )
+    if candidate_digest is not None:
+        _validate_rescue_provenance(
+            rescue,
+            families,
+            candidate_artifact or {"provenance": {}},
+            strict_sha,
+            candidate_digest,
+            rescue_sha,
+        )
+    else:
+        # Keep the strict-family hash and body/provenance checks active even
+        # for direct callers that do not have the candidate file hash.
+        provenance = rescue.get("provenance")
+        if not isinstance(provenance, Mapping):
+            raise ValueError("rescue artifact provenance is missing")
+        if provenance.get("family_artifact_sha256") != strict_sha:
+            raise ValueError("rescue was built from another strict family artifact")
+        for key, value in provenance.items():
+            if key.endswith("_sha256"):
+                _digest(value, f"rescue provenance.{key}")
+        declared_rescue_sha = provenance.get("rescue_artifact_sha256")
+        if declared_rescue_sha is not None and declared_rescue_sha != rescue_sha:
+            raise ValueError("rescue artifact SHA-256 does not match its provenance")
+        family_provenance = families.get("provenance")
+        if isinstance(family_provenance, Mapping):
+            for key in ("stripped_sha256", "body_evidence_sha256"):
+                recorded = provenance.get(key)
+                expected = family_provenance.get(key)
+                if recorded is not None and expected is not None and _digest(
+                    recorded, f"rescue provenance.{key}"
+                ) != _digest(expected, f"strict provenance.{key}"):
+                    raise ValueError(f"family/rescue provenance mismatch on {key}")
+
+    strict_cores, _, _ = _strict_view(families)
+    declared_strict = _partition_mapping(
+        rescue.get("strict_partition"), where="rescue strict_partition"
+    )
+    if declared_strict != strict_cores:
+        raise ValueError(
+            "rescue strict_partition does not match strict accepted partition"
+        )
+
+    final = _partition_mapping(
+        rescue.get("final_partition"), where="rescue final_partition"
+    )
+    accepted_members = {
+        member for members in strict_cores.values() for member in members
+    }
+    final_members = {member for members in final.values() for member in members}
+    if final_members != accepted_members:
+        missing = sorted(accepted_members - final_members)
+        added = sorted(final_members - accepted_members)
+        if missing:
+            raise ValueError(
+                "rescue final_partition is missing strict accepted member "
+                f"{missing[0]!r}"
+            )
+        raise ValueError(
+            "rescue final_partition added a non-strict member "
+            f"{added[0]!r}"
+        )
+    return final
 
 
 def _validate_relaxed_config(config: PairPolicyConfig) -> None:
@@ -582,6 +811,27 @@ def evaluate_relaxed_pairs(
     one budget gate.  No feature provider or body alignment is invoked until
     the complete union has been priced successfully.
     """
+    evaluations, accounting, _ = _evaluate_relaxed_pair_union(
+        family_artifact,
+        candidate_artifact,
+        bodies,
+        config,
+        core_partitions,
+        feature_provider=feature_provider,
+    )
+    return evaluations, accounting
+
+
+def _evaluate_relaxed_pair_union(
+    family_artifact: Mapping[str, Any],
+    candidate_artifact: Mapping[str, Any],
+    bodies: Mapping[str, FunctionBody],
+    config: PairPolicyConfig,
+    core_partitions: Mapping[str, Any] | Sequence[Any],
+    *,
+    feature_provider: Callable[[PairKey], PairFeatures] | None = None,
+) -> tuple[list[PairEvaluation], dict[str, Any], set[PairKey]]:
+    """Evaluate one pre-priced union and return its pair identities too."""
     _validate_relaxed_config(config)
     _check_relaxed_inputs(family_artifact, candidate_artifact)
     possible = possible_cross_pairs(
@@ -600,9 +850,73 @@ def evaluate_relaxed_pairs(
             f"{required_count} comparisons and {required_cells} alignment cells"
         )
     evaluations = [cache.get_evaluation(pair) for pair in sorted(possible)]
-    return evaluations, _relaxed_accounting(
-        cache, len(possible), required_count, required_cells
+    return (
+        evaluations,
+        _relaxed_accounting(cache, len(possible), required_count, required_cells),
+        possible,
     )
+
+
+def _build_variant_artifact(
+    family_artifact: Mapping[str, Any],
+    strict_cores: Mapping[str, tuple[str, ...]],
+    cores: Mapping[str, tuple[str, ...]],
+    evaluations: Sequence[PairEvaluation],
+    *,
+    family_sha: str,
+    candidate_sha: str,
+    accounting: Mapping[str, Any],
+    partition: str,
+    rescue_sha: str | None,
+) -> dict[str, Any]:
+    """Build one deterministic attachment artifact from cached evaluations."""
+    records = [
+        item.to_dict() for item in sorted(evaluations, key=lambda item: item.pair)
+    ]
+    evaluated_family = dict(family_artifact)
+    evaluated_family["pair_decisions"] = records
+    if partition == "f7-core":
+        evaluated_family["clusters"] = [
+            {
+                "id": identifier,
+                "status": "accepted",
+                "members": list(members),
+            }
+            for identifier, members in sorted(cores.items())
+        ] + [
+            cluster
+            for cluster in family_artifact["clusters"]
+            if cluster.get("status") != "accepted"
+        ]
+    artifact = build_provisional_artifact(
+        evaluated_family, family_artifact_sha256=family_sha
+    )
+    artifact["rule_version"] = (
+        STRICT_RULE_VERSION if partition == "strict-core" else F7_RULE_VERSION
+    )
+    artifact["partition"] = partition
+    artifact["provenance"]["relaxed_candidate_artifact_sha256"] = candidate_sha
+    artifact["provenance"]["relaxed_pair_decisions_sha256"] = (
+        _pair_decisions_digest(records)
+    )
+    if rescue_sha is not None:
+        artifact["provenance"]["rescue_artifact_sha256"] = rescue_sha
+    artifact["policy"]["support"] = (
+        "consensus2 candidate match under the frozen formal pair policy"
+    )
+    if partition == "f7-core":
+        artifact["policy"]["ambiguity"] = (
+            "attach only when exactly one F7 core is eligible"
+        )
+        artifact["strict_partition"] = _partition_records(strict_cores)
+        artifact["core_partition"] = _partition_records(cores)
+        artifact["summary"]["strict_family_count"] = len(strict_cores)
+        artifact["summary"]["strict_accepted_member_count"] = sum(
+            len(members) for members in strict_cores.values()
+        )
+    artifact["pair_decisions"] = records
+    artifact["metrics"] = dict(accounting)
+    return artifact
 
 
 def build_relaxed_artifacts(
@@ -622,52 +936,115 @@ def build_relaxed_artifacts(
     candidate_sha = _digest(
         candidate_artifact_sha256, "candidate_artifact_sha256"
     )
-    if rescue_artifact is not None or rescue_artifact_sha256 is not None:
-        raise NotImplementedError("F7-core relaxed attachments are not implemented")
+    if rescue_artifact is None and rescue_artifact_sha256 is not None:
+        raise ValueError("rescue_artifact_sha256 requires a rescue artifact")
+    if rescue_artifact is not None and rescue_artifact_sha256 is None:
+        raise ValueError("rescue_artifact_sha256 is required with a rescue artifact")
+
     _validate_relaxed_config(config)
-    cores, _, _ = _strict_view(family_artifact)
-    evaluations, accounting = evaluate_relaxed_pairs(
+    strict_cores, _, _ = _strict_view(family_artifact)
+    rescue_sha: str | None = None
+    f7_cores: dict[str, tuple[str, ...]] | None = None
+    if rescue_artifact is not None:
+        rescue_sha = _digest(rescue_artifact_sha256, "rescue_artifact_sha256")
+        f7_cores = validate_rescue_partition(
+            family_artifact,
+            rescue_artifact,
+            family_sha,
+            rescue_sha,
+            candidate_sha,
+            candidate_artifact=candidate_artifact,
+        )
+
+    partitions: dict[str, Mapping[str, tuple[str, ...]]] = {
+        "strict-core": strict_cores,
+    }
+    if f7_cores is not None:
+        partitions["f7-core"] = f7_cores
+    evaluations, accounting, possible = _evaluate_relaxed_pair_union(
         family_artifact,
         candidate_artifact,
         bodies,
         config,
-        {"strict-core": cores},
+        partitions,
         feature_provider=feature_provider,
     )
 
-    evaluated_family = dict(family_artifact)
-    evaluated_family["pair_decisions"] = [item.to_dict() for item in evaluations]
-    strict = build_provisional_artifact(
-        evaluated_family, family_artifact_sha256=family_sha
+    strict_possible = possible_cross_pairs(
+        family_artifact, candidate_artifact, {"strict-core": strict_cores}
     )
-    strict["rule_version"] = "consensus2-strict-core-attachment-v2"
-    strict["partition"] = "strict-core"
-    strict["provenance"]["relaxed_candidate_artifact_sha256"] = candidate_sha
-    strict["policy"]["support"] = (
-        "consensus2 candidate match under the frozen formal pair policy"
+    strict_evaluations = [
+        item for item in evaluations if item.pair in strict_possible
+    ]
+    strict = _build_variant_artifact(
+        family_artifact,
+        strict_cores,
+        strict_cores,
+        strict_evaluations,
+        family_sha=family_sha,
+        candidate_sha=candidate_sha,
+        accounting=accounting,
+        partition="strict-core",
+        rescue_sha=rescue_sha,
     )
-    strict["pair_decisions"] = [item.to_dict() for item in evaluations]
-    strict["provenance"]["relaxed_pair_decisions_sha256"] = _pair_decisions_digest(
-        strict["pair_decisions"]
+    if f7_cores is None:
+        return strict, None
+
+    f7_possible = possible_cross_pairs(
+        family_artifact, candidate_artifact, {"f7-core": f7_cores}
     )
-    strict["metrics"] = accounting
-    return strict, None
+    f7_evaluations = [item for item in evaluations if item.pair in f7_possible]
+    rescue_relaxed = _build_variant_artifact(
+        family_artifact,
+        strict_cores,
+        f7_cores,
+        f7_evaluations,
+        family_sha=family_sha,
+        candidate_sha=candidate_sha,
+        accounting=accounting,
+        partition="f7-core",
+        rescue_sha=rescue_sha,
+    )
+    return strict, rescue_relaxed
 
 
 def _validate_relaxed_artifact(
     artifact: Mapping[str, Any],
     family_artifact: Mapping[str, Any],
     family_artifact_sha256: str,
+    *,
+    rescue_artifact: Mapping[str, Any] | None = None,
+    rescue_artifact_sha256: str | None = None,
 ) -> tuple[dict[str, tuple[str, ...]], list[dict[str, Any]]]:
-    """Validate a generated strict-core relaxed artifact without F4 inputs."""
+    """Validate a generated relaxed artifact without rerunning F4 inputs."""
     strict_sha = _digest(family_artifact_sha256, "family_artifact_sha256")
     if artifact.get("artifact") != ARTIFACT:
         raise ValueError("relaxed artifact has an unsupported artifact name")
-    if artifact.get("rule_version") != "consensus2-strict-core-attachment-v2":
+    rule_version = artifact.get("rule_version")
+    if rule_version not in (STRICT_RULE_VERSION, F7_RULE_VERSION):
         raise ValueError("relaxed artifact does not match the deterministic rule")
-    if artifact.get("partition") != "strict-core":
+    partition = artifact.get("partition")
+    expected_partition = (
+        "strict-core" if rule_version == STRICT_RULE_VERSION else "f7-core"
+    )
+    if partition != expected_partition:
         raise ValueError("relaxed artifact does not match the deterministic rule")
-    cores, candidates, _ = _strict_view(family_artifact)
+    strict_cores, candidates, _ = _strict_view(family_artifact)
+    cores = strict_cores
+    if partition == "f7-core":
+        cores = _partition_mapping(
+            artifact.get("core_partition"), where="relaxed core_partition"
+        )
+        accepted = {
+            member for members in strict_cores.values() for member in members
+        }
+        observed = {member for members in cores.values() for member in members}
+        if observed != accepted:
+            raise ValueError(
+                "relaxed core_partition does not cover strict accepted members"
+            )
+        if artifact.get("core_partition") != _partition_records(cores):
+            raise ValueError("relaxed core_partition is not canonical")
 
     for key in ("case", "build", "profile", "scope"):
         if artifact.get(key) != family_artifact.get(key):
@@ -688,11 +1065,37 @@ def _validate_relaxed_artifact(
         provenance.get("relaxed_candidate_artifact_sha256"),
         "relaxed provenance.relaxed_candidate_artifact_sha256",
     )
+    recorded_rescue_sha = provenance.get("rescue_artifact_sha256")
+    if partition == "f7-core":
+        if recorded_rescue_sha is None:
+            raise ValueError("relaxed F7 artifact has no rescue artifact hash")
+        _digest(recorded_rescue_sha, "relaxed provenance.rescue_artifact_sha256")
+        if rescue_artifact is not None and rescue_artifact_sha256 is None:
+            raise ValueError(
+                "rescue_artifact_sha256 is required with a rescue artifact"
+            )
+        if rescue_artifact_sha256 is not None:
+            expected_rescue_sha = _digest(
+                rescue_artifact_sha256, "rescue_artifact_sha256"
+            )
+            if recorded_rescue_sha != expected_rescue_sha:
+                raise ValueError(
+                    "relaxed artifact was built from a different rescue artifact"
+                )
+            if rescue_artifact is not None:
+                validated = validate_rescue_partition(
+                    family_artifact,
+                    rescue_artifact,
+                    strict_sha,
+                    expected_rescue_sha,
+                    candidate_sha=None,
+                )
+                if validated != cores:
+                    raise ValueError(
+                        "relaxed core_partition does not match rescue final_partition"
+                    )
 
-    strict_partition = [
-        {"id": identifier, "members": list(members)}
-        for identifier, members in sorted(cores.items())
-    ]
+    strict_partition = _partition_records(strict_cores)
     if artifact.get("strict_partition") != strict_partition:
         raise ValueError("relaxed artifact does not match the deterministic rule")
 
@@ -729,8 +1132,10 @@ def _validate_relaxed_artifact(
     if not isinstance(summary, Mapping):
         raise ValueError("relaxed artifact does not match the deterministic rule")
     expected_summary = {
-        "strict_family_count": len(cores),
-        "strict_accepted_member_count": sum(len(members) for members in cores.values()),
+        "strict_family_count": len(strict_cores),
+        "strict_accepted_member_count": sum(
+            len(members) for members in strict_cores.values()
+        ),
         "input_provisional_member_count": len(
             family_artifact["status_members"]["provisional"]
         ),
@@ -753,11 +1158,17 @@ def groups_for_scoring(
     family_artifact: Mapping[str, Any],
     *,
     family_artifact_sha256: str,
+    rescue_artifact: Mapping[str, Any] | None = None,
+    rescue_artifact_sha256: str | None = None,
 ) -> list[list[str]]:
     """Validate the artifact and return strict plus one-member hypotheses."""
-    if artifact.get("rule_version") == "consensus2-strict-core-attachment-v2":
+    if artifact.get("rule_version") in (STRICT_RULE_VERSION, F7_RULE_VERSION):
         cores, attachments = _validate_relaxed_artifact(
-            artifact, family_artifact, family_artifact_sha256
+            artifact,
+            family_artifact,
+            family_artifact_sha256,
+            rescue_artifact=rescue_artifact,
+            rescue_artifact_sha256=rescue_artifact_sha256,
         )
         cores = {identifier: sorted(members) for identifier, members in cores.items()}
     else:
