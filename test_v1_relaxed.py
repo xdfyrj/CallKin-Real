@@ -343,7 +343,14 @@ def _body(function_id):
     return FunctionBody(
         id=function_id,
         size=1,
-        instructions=({"mnemonic": "ret", "constants": [1], "slots": []},),
+        instructions=({
+            "offset": 0,
+            "mnemonic": "ret",
+            "mnemonic_class": "ret",
+            "operands": [],
+            "constants": [1],
+            "slots": [],
+        },),
         edges=(),
         blocks=({"label": "B0", "instruction_indices": [0]},),
         quality={"complete_decode": True, "opaque_indirect_jumps": 0},
@@ -1077,6 +1084,46 @@ def test_evaluator_reports_relaxed_precision_and_recall_separately():
     assert provisional["attachment_count"] == 1
 
 
+def test_evaluator_reports_both_relaxed_variants_separately():
+    import evaluate
+
+    families = _two_core_families(C)
+    rescue = _rescue_that_merges_the_two_cores(families)
+    rescue["summary"] = {
+        "final_family_count": 1,
+        "rescued_family_count": 1,
+        "reserved_comparisons": 0,
+        "reserved_alignment_cells": 0,
+    }
+    strict_relaxed, rescue_relaxed = _build_two_core_variants(rescue)
+    assert rescue_relaxed is not None
+    ground_truth = {
+        "symbols": {},
+        "origins": [{"origin": "same", "members": [A, B, C, D, E]}],
+    }
+    universe = {"functions": [
+        {"id": member, "grouping_role": "member"}
+        for member in (A, B, C, D, E)
+    ]}
+    relation = {"predicted_clusters": {}}
+    methods = evaluate.score_grouping(
+        ground_truth,
+        universe,
+        relation,
+        families,
+        rescue,
+        {},
+        relaxed=strict_relaxed,
+        rescue_relaxed=rescue_relaxed,
+        family_artifact_sha256="d" * 64,
+        rescue_artifact_sha256=_rescue_sha(rescue),
+    )["methods"]
+    assert "v1_relaxed_provisional" in methods
+    assert "v1_strict_rescue_relaxed_provisional" in methods
+    assert methods["v1_relaxed_provisional"]["partition"] == "strict-core"
+    assert methods["v1_strict_rescue_relaxed_provisional"]["partition"] == "f7-core"
+
+
 def test_relaxed_artifact_is_refused_as_a_flirt_propagation_partition():
     from flirt_labels import build_label_artifact
     from label_propagation import build_propagation
@@ -1104,6 +1151,202 @@ def test_relaxed_artifact_is_refused_as_a_flirt_propagation_partition():
         assert "strict" in str(exc) or "family" in str(exc)
     else:
         raise AssertionError("provisional attachments were used for FLIRT propagation")
+
+    f7_families = _two_core_families(C)
+    f7_rescue = _rescue_that_merges_the_two_cores(f7_families)
+    _, f7_relaxed = _build_two_core_variants(f7_rescue)
+    assert f7_relaxed is not None
+    strict_relaxed, _ = _module().build_relaxed_artifacts(
+        _families(provisional=(), unresolved=(C,)),
+        _consensus2(_candidate(A, C)),
+        _bodies(A, B, C),
+        _formal_config(),
+        family_artifact_sha256="d" * 64,
+        candidate_artifact_sha256="e" * 64,
+        feature_provider=_match_features,
+    )
+    for artifact in (strict_relaxed, f7_relaxed):
+        try:
+            build_propagation(
+                artifact,
+                labels,
+                None,
+                family_artifact_sha256="d" * 64,
+                label_artifact_sha256="e" * 64,
+                rescue_artifact_sha256=None,
+            )
+        except ValueError as exc:
+            assert "strict" in str(exc) or "family" in str(exc)
+        else:
+            raise AssertionError("a relaxed output was used for FLIRT propagation")
+
+
+class _MemoryPath:
+    files = {}
+    writes = {}
+
+    def __init__(self, value):
+        self.value = str(value)
+
+    @property
+    def parent(self):
+        return _MemoryPath(self.value.rsplit("/", 1)[0] if "/" in self.value else "")
+
+    @property
+    def stem(self):
+        return self.value.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+    def __truediv__(self, other):
+        return _MemoryPath(
+            f"{self.value}/{other}" if self.value else str(other)
+        )
+
+    def read_bytes(self):
+        return self.files[self.value]
+
+    def read_text(self, encoding=None):
+        return self.read_bytes().decode(encoding or "utf-8")
+
+    def is_file(self):
+        return self.value in self.files
+
+    def mkdir(self, *, parents=False, exist_ok=False):
+        return None
+
+    def write_bytes(self, data):
+        self.writes[self.value] = data
+        return len(data)
+
+    def __str__(self):
+        return self.value
+
+
+def _json_bytes(value):
+    return (
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode("utf-8")
+
+
+def _run_relaxed_cli(files, source):
+    import contextlib
+    import io
+    from unittest.mock import patch
+
+    import v1_relaxed
+
+    _MemoryPath.files = files
+    _MemoryPath.writes = {}
+    output = io.StringIO()
+    errors = io.StringIO()
+    config = _formal_config()
+    with patch.object(v1_relaxed, "Path", _MemoryPath), \
+            patch.object(v1_relaxed, "load_from_run", return_value=source), \
+            patch.object(
+                v1_relaxed.PairPolicyConfig,
+                "from_file",
+                return_value=config,
+            ), \
+            contextlib.redirect_stdout(output), \
+            contextlib.redirect_stderr(errors):
+        code = v1_relaxed.main(["run.json", "--config", "formal.json"])
+    report = json.loads(output.getvalue()) if output.getvalue() else None
+    return code, report, dict(_MemoryPath.writes), errors.getvalue()
+
+
+def test_relaxed_cli_writes_paired_outputs_and_preserves_input_provenance():
+    families = _two_core_families(C)
+    candidates = _consensus2(
+        _candidate(A, C),
+        _candidate(D, C),
+        targets=(A, B, C, D, E),
+    )
+    rescue = _rescue_that_merges_the_two_cores(families)
+    family_raw = _json_bytes(families)
+    candidate_raw = _json_bytes(candidates)
+    rescue["provenance"]["family_artifact_sha256"] = hashlib.sha256(
+        family_raw
+    ).hexdigest()
+    rescue["provenance"]["candidate_artifact_sha256"] = hashlib.sha256(
+        candidate_raw
+    ).hexdigest()
+    rescue_raw = _json_bytes(rescue)
+    files = {
+        "run.json": _json_bytes({"binary": {"sha256": "a" * 64}}),
+        "formal.json": b"formal-config",
+        "run.v1.families.strict.json": family_raw,
+        "run.v1.consensus2.k16.candidates.json": candidate_raw,
+        "run.v1.families.rescue.json": rescue_raw,
+    }
+    source = type("Source", (), {
+        "binary_sha256": "a" * 64,
+        "bodies": _bodies(A, B, C, D, E),
+    })()
+    code, report, writes, errors = _run_relaxed_cli(files, source)
+    assert code == 0, errors
+    assert sorted(writes) == [
+        "run.v1.families.relaxed.json",
+        "run.v1.families.rescue-relaxed.json",
+    ]
+    strict = json.loads(writes["run.v1.families.relaxed.json"])
+    f7 = json.loads(writes["run.v1.families.rescue-relaxed.json"])
+    assert strict["partition"] == "strict-core"
+    assert f7["partition"] == "f7-core"
+    assert strict["provenance"]["family_artifact_sha256"] == hashlib.sha256(
+        family_raw
+    ).hexdigest()
+    assert f7["provenance"]["rescue_artifact_sha256"] == hashlib.sha256(
+        rescue_raw
+    ).hexdigest()
+    assert report["queue"]["kind"] == "consensus2"
+    assert report["artifacts"]["f7"]["partition"] == "f7-core"
+
+
+def test_relaxed_cli_omits_f7_output_when_rescue_is_absent():
+    families = _families(provisional=(), unresolved=(C,))
+    candidates = _consensus2(_candidate(A, C), targets=(A, B, C))
+    family_raw = _json_bytes(families)
+    candidate_raw = _json_bytes(candidates)
+    files = {
+        "run.json": _json_bytes({"binary": {"sha256": "a" * 64}}),
+        "formal.json": b"formal-config",
+        "run.v1.families.strict.json": family_raw,
+        "run.v1.consensus2.k16.candidates.json": candidate_raw,
+    }
+    source = type("Source", (), {
+        "binary_sha256": "a" * 64,
+        "bodies": _bodies(A, B, C),
+    })()
+    code, report, writes, errors = _run_relaxed_cli(files, source)
+    assert code == 0, errors
+    assert sorted(writes) == ["run.v1.families.relaxed.json"]
+    assert report["rescue"] is None
+    assert report["artifacts"]["f7"] is None
+
+
+def test_relaxed_cli_rejects_rescue_built_from_another_strict_artifact():
+    families = _two_core_families(C)
+    candidates = _consensus2(
+        _candidate(A, C),
+        _candidate(D, C),
+        targets=(A, B, C, D, E),
+    )
+    rescue = _rescue_that_merges_the_two_cores(families)
+    files = {
+        "run.json": _json_bytes({"binary": {"sha256": "a" * 64}}),
+        "formal.json": b"formal-config",
+        "run.v1.families.strict.json": _json_bytes(families),
+        "run.v1.consensus2.k16.candidates.json": _json_bytes(candidates),
+        "run.v1.families.rescue.json": _json_bytes(rescue),
+    }
+    source = type("Source", (), {
+        "binary_sha256": "a" * 64,
+        "bodies": _bodies(A, B, C, D, E),
+    })()
+    code, report, writes, errors = _run_relaxed_cli(files, source)
+    assert code == 1
+    assert report is None
+    assert writes == {}
+    assert "another strict" in errors
 
 
 def main() -> int:
@@ -1139,7 +1382,11 @@ def main() -> int:
     test_a_non_consensus3_strict_queue_is_refused()
     test_missing_or_invalid_strict_provenance_is_refused()
     test_evaluator_reports_relaxed_precision_and_recall_separately()
+    test_evaluator_reports_both_relaxed_variants_separately()
     test_relaxed_artifact_is_refused_as_a_flirt_propagation_partition()
+    test_relaxed_cli_writes_paired_outputs_and_preserves_input_provenance()
+    test_relaxed_cli_omits_f7_output_when_rescue_is_absent()
+    test_relaxed_cli_rejects_rescue_built_from_another_strict_artifact()
     print("CallKin-Real relaxed V1: PASS")
     return 0
 

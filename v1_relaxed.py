@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from typing import Any, Callable, Mapping
 
 from body_similarity import FunctionBody
+from real_v1_adapter import load_from_run
 
 _FROZEN = Path(__file__).resolve().parent / "frozen_v1"
 if str(_FROZEN) not in sys.path:
@@ -39,6 +40,8 @@ SCHEMA_VERSION = 1
 RULE_VERSION = "strict-core-attachment-v1"
 STRICT_RULE_VERSION = "consensus2-strict-core-attachment-v2"
 F7_RULE_VERSION = "consensus2-f7-core-attachment-v2"
+FORMAL_CONFIG = _FROZEN / "configs" / "v1.formal.json"
+RELAXED_QUEUE = "consensus2"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _DECISIONS = {"match", "reject", "unknown", "abstain"}
 _SOURCES = {"candidate", "on-demand"}
@@ -1288,8 +1291,25 @@ def write_json(path: Path, value: Any) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", help="a CallKin-Real run manifest")
+    parser.add_argument(
+        "--candidates",
+        help=f"relaxed queue; defaults to the {RELAXED_QUEUE} file beside the run",
+    )
     parser.add_argument("--families", help="strict F6 family artifact")
-    parser.add_argument("--output")
+    parser.add_argument(
+        "--rescue",
+        help="optional F7 rescue artifact; writes the paired F7 relaxed output",
+    )
+    parser.add_argument(
+        "--config",
+        default=str(FORMAL_CONFIG),
+        help="formal V1 pair policy; defaults to frozen_v1/configs/v1.formal.json",
+    )
+    parser.add_argument("--top-k", type=int, default=16)
+    parser.add_argument("--output", help="strict-core relaxed artifact path")
+    parser.add_argument(
+        "--rescue-output", help="F7-core relaxed artifact path (when rescue is supplied)"
+    )
     return parser
 
 
@@ -1298,33 +1318,119 @@ def main(argv: list[str] | None = None) -> int:
     try:
         run_path = Path(args.run)
         run = json.loads(run_path.read_text(encoding="utf-8"))
+        source = load_from_run(run_path)
         family_path = (
             Path(args.families)
             if args.families
             else run_path.parent / f"{run_path.stem}.v1.families.strict.json"
         )
-        raw = family_path.read_bytes()
-        families = json.loads(raw.decode("utf-8"))
+        family_raw = family_path.read_bytes()
+        families = json.loads(family_raw.decode("utf-8"))
+        family_sha = _sha256(family_raw)
         if run["binary"]["sha256"] != families["provenance"]["stripped_sha256"]:
             raise ValueError("run and strict families describe different binaries")
-        artifact = build_provisional_artifact(
-            families, family_artifact_sha256=_sha256(raw)
+        candidate_path = (
+            Path(args.candidates)
+            if args.candidates
+            else run_path.parent
+            / f"{run_path.stem}.v1.{RELAXED_QUEUE}.k{args.top_k}.candidates.json"
+        )
+        candidate_raw = candidate_path.read_bytes()
+        candidates = json.loads(candidate_raw.decode("utf-8"))
+        candidate_sha = _sha256(candidate_raw)
+        config_raw = Path(args.config).read_bytes()
+        config_sha = _sha256(config_raw)
+        config = PairPolicyConfig.from_file(args.config)
+
+        rescue_path = None
+        rescue = None
+        rescue_sha = None
+        if args.rescue:
+            rescue_path = Path(args.rescue)
+        else:
+            default_rescue = run_path.parent / f"{run_path.stem}.v1.families.rescue.json"
+            if default_rescue.is_file():
+                rescue_path = default_rescue
+        if rescue_path is not None:
+            rescue_raw = rescue_path.read_bytes()
+            rescue = json.loads(rescue_raw.decode("utf-8"))
+            rescue_sha = _sha256(rescue_raw)
+
+        strict_artifact, rescue_relaxed = build_relaxed_artifacts(
+            families,
+            candidates,
+            source.bodies,
+            config,
+            family_artifact_sha256=family_sha,
+            candidate_artifact_sha256=candidate_sha,
+            rescue_artifact=rescue,
+            rescue_artifact_sha256=rescue_sha,
         )
         output = (
             Path(args.output)
             if args.output
             else run_path.parent / f"{run_path.stem}.v1.families.relaxed.json"
         )
-        digest = write_json(output, artifact)
+        strict_digest = write_json(output, strict_artifact)
+        rescue_output = None
+        rescue_digest = None
+        if rescue_relaxed is not None:
+            rescue_output = (
+                Path(args.rescue_output)
+                if args.rescue_output
+                else run_path.parent
+                / f"{run_path.stem}.v1.families.rescue-relaxed.json"
+            )
+            rescue_digest = write_json(rescue_output, rescue_relaxed)
     except Exception as exc:
-        print(f"error: {exc}")
+        print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps({
+    report = {
         "output": str(output),
-        "sha256": digest,
+        "sha256": strict_digest,
         "artifact": ARTIFACT,
-        "summary": artifact["summary"],
-    }, ensure_ascii=False))
+        "summary": strict_artifact["summary"],
+        "binary_sha256": source.binary_sha256,
+        "queue": {
+            "path": str(candidate_path),
+            "sha256": candidate_sha,
+            "kind": RELAXED_QUEUE,
+        },
+        "config": {
+            "path": str(args.config),
+            "sha256": config_sha,
+            "policy": config.to_dict(),
+        },
+        "families": {"path": str(family_path), "sha256": family_sha},
+        "strict_families": {"path": str(family_path), "sha256": family_sha},
+        "rescue": (
+            {"path": str(rescue_path), "sha256": rescue_sha}
+            if rescue_path is not None
+            else None
+        ),
+        "artifacts": {
+            "strict": {
+                "path": str(output),
+                "sha256": strict_digest,
+                "partition": strict_artifact["partition"],
+                "summary": strict_artifact["summary"],
+            },
+            "f7": (
+                {
+                    "path": str(rescue_output),
+                    "sha256": rescue_digest,
+                    "partition": rescue_relaxed["partition"],
+                    "summary": rescue_relaxed["summary"],
+                }
+                if rescue_relaxed is not None
+                else None
+            ),
+        },
+    }
+    if rescue_relaxed is not None:
+        report["rescue_output"] = str(rescue_output)
+        report["rescue_sha256"] = rescue_digest
+    print(json.dumps(report, ensure_ascii=False))
     return 0
 
 

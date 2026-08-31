@@ -84,21 +84,29 @@ environment. Its direct FLIRT output is only a library-context label.
 
 ## Experimental relaxed V1
 
-After strict F6 has written `run.v1.families.strict.json`, build the separate
-provisional attachment artifact with:
+After strict F6 has written `run.v1.families.strict.json` and F5 has written
+the `consensus2` queue, build the relaxed artifacts with:
 
 ```bash
 python v1_relaxed.py results/run.json
 ```
+
+The command reads `run.v1.consensus2.k16.candidates.json`, complete bodies from
+the run stages, and `frozen_v1/configs/v1.formal.json`. It writes
+`run.v1.families.relaxed.json`; when `run.v1.families.rescue.json` is present it
+also writes `run.v1.families.rescue-relaxed.json`. Use `--candidates`,
+`--families`, `--rescue`, `--config`, `--output`, or `--rescue-output` to
+override these paths.
 
 This does not change a strict family. A singleton may attach provisionally to
 one strict core when a consensus3 candidate pair is a body `match`, while
 `unknown`, `abstain`, and missing comparisons do not veto it. A hard `reject`
 does veto it, and a singleton compatible with two cores stays ambiguous.
 Each attachment is scored separately, so two provisional members are never
-made siblings by transitivity. The resulting
-`run.v1.families.relaxed.json` is evaluation-only and cannot be used for
-FLIRT label propagation. The frozen formal config currently has no
+made siblings by transitivity. Both output artifacts are evaluation-only and
+cannot be used for FLIRT label propagation. The frozen formal config currently has no
 `structure_reject_threshold`, so its strict artifacts may contain no hard
 `reject` decisions; relaxed results must therefore be reported as exploratory,
-not as a replacement for strict V1.
+not as a replacement for strict V1. `evaluate.py` loads both output files when
+present and reports `v1_relaxed_provisional` and
+`v1_strict_rescue_relaxed_provisional` separately with partition and provenance.
