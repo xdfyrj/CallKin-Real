@@ -1,0 +1,51 @@
+{
+  "fixture": "family_axis_04",
+  "source": "src/family_axis_04.rs",
+  "build": "O3S",
+  "profile": "plain",
+  "purpose": "A complete and bijective 2 x 2 that must NOT be merged. It proves the relation bridge alone cannot stop a false merge, and that internal fragment support is doing real work.",
+  "note": "Fixed before the fixture was compiled. The gt gates run first: if the fixture did not come out as designed, the rescue expectation is meaningless and must not be checked or relaxed.",
+  "gt_gates": {
+    "left": {
+      "address_members": 2,
+      "unique_linkage_identities": 2,
+      "repeated_linkage_identities": 0
+    },
+    "right": {
+      "address_members": 2,
+      "unique_linkage_identities": 2,
+      "repeated_linkage_identities": 0
+    }
+  },
+  "gt_gate_failure_meanings": {
+    "fewer_than_2_addresses": "a kernel was inlined or folded away despite inline(never); the fixture source is wrong",
+    "left_and_right_share_an_address": "identical-code folding merged the two kernels, so the salts did not separate them and the negative control is void"
+  },
+  "axes": {
+    "combined": {
+      "input_fragments": [["left"], ["right"]],
+      "member_count": 4,
+      "variant_counts": [2, 2],
+      "expected_combinations": 4,
+      "observed_combinations": 4,
+      "complete": true,
+      "bijective": true,
+      "selected_basis_status": "unique"
+    }
+  },
+  "rescue": {
+    "relation_bridge": true,
+    "internal_fragment_support": false,
+    "accepted": false,
+    "rejection_reason": "axis_without_internal_fragment_support"
+  },
+  "why_this_is_the_whole_point": [
+    "The A0/A1 axis varies inside each fragment, so it has internal support.",
+    "The left/right axis only separates the two fragments and never varies within one, so it has none.",
+    "Both kernels call the same common_marker and the same A-dependent callee, so the relation bridge condition passes and cannot be what refuses the merge."
+  ],
+  "not_asserted": [
+    "Whether any callsite resolves as unresolved or filtered. Rust source cannot force angr to fail, so resolver state is reported and never gated.",
+    "The names of the source functions. F7 recovers anonymous axes."
+  ]
+}

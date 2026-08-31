@@ -1,4 +1,4 @@
-"""R3b: the frozen F5 runs on CallKin-Real artifacts and stays frozen.
+"""R4: the frozen F5 runs on CallKin-Real artifacts and stays frozen.
 
 Three things are worth failing on. The F5 code must be the frozen bytes, or the
 formal V1 results say nothing about what this produces. The oracle-side modules

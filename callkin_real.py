@@ -23,12 +23,43 @@ from body_builder import body_quality_by_address, build_bodies
 
 ID_BIAS = 0x100000
 RELATION_MODE = "out-in"
+# The rules that decide the universe and the projected graph. Named here rather
+# than written inline in the run manifest, so the downstream stages can hash the
+# same strings the manifest reports instead of a paraphrase of them.
+GROUPING_ROLE_RULE = (
+    "internal function with a complete body is a member, whatever its owner or "
+    "FLIRT label; root, import and address-only targets are context-only; "
+    "incomplete internal functions abstain"
+)
+EDGE_RULE = (
+    "exact direct, format-specific relocation/IAT, and angr singleton targets; "
+    "address-only targets become opaque anchors"
+)
+# Opaque targets are coloured by their address, root by its role, imports by
+# their own name. The frozen vocabulary calls that the address policy.
+ANCHOR_POLICY = "address"
 STANDARD_OWNERS = {"core", "alloc", "std", "__rustc"}
 PAD_MNEMONICS = {"nop", "int3", "ud2"}
 
 
 def function_id(address: int) -> str:
     return f"FUN_{address + ID_BIAS:08x}"
+
+
+def address_from_function_id(value: str) -> int:
+    """Invert `function_id`.
+
+    The frozen V1 keeps this beside its ground-truth extractor. It is pure
+    string arithmetic and importing that module into CallKin-Real would put a
+    ground-truth dependency in the analysis path, so it lives here instead.
+    """
+    if not value.startswith("FUN_"):
+        raise ValueError(f"not a function id: {value!r}")
+    try:
+        biased = int(value[4:], 16)
+    except ValueError as exc:
+        raise ValueError(f"not a function id: {value!r}") from exc
+    return biased - ID_BIAS
 
 
 def hex_address(address: int | None) -> str | None:
@@ -1418,8 +1449,9 @@ def main(argv: list[str] | None = None) -> int:
             "analysis": {
                 "input": "stripped-only",
                 "relation_mode": RELATION_MODE,
-                "grouping_role_rule": "internal function with a complete body is a member, whatever its owner or FLIRT label; root, import and address-only targets are context-only; incomplete internal functions abstain",
-                "edge_rule": "exact direct, format-specific relocation/IAT, and angr singleton targets; address-only targets become opaque anchors",
+                "grouping_role_rule": GROUPING_ROLE_RULE,
+                "edge_rule": EDGE_RULE,
+                "anchor_policy": ANCHOR_POLICY,
                 "discovery": [
                     "radare2",
                     "angr-CFGFast",

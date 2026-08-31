@@ -1,0 +1,57 @@
+{
+  "fixture": "family_axis_03",
+  "source": "src/family_axis_03.rs",
+  "build": "O3S",
+  "profile": "plain",
+  "note": "Fixed before the fixture was compiled. The gt gates run first: if the fixture itself did not come out as designed, the axis expectations are meaningless and must not be checked or relaxed.",
+  "gt_gates": {
+    "complete": {
+      "address_members": 6,
+      "unique_linkage_identities": 6,
+      "repeated_linkage_identities": 0
+    },
+    "incomplete": {
+      "address_members": 5,
+      "unique_linkage_identities": 5,
+      "repeated_linkage_identities": 0
+    },
+    "same_axis": {
+      "address_members": 2,
+      "unique_linkage_identities": 2,
+      "repeated_linkage_identities": 0
+    }
+  },
+  "gt_gate_failure_meanings": {
+    "incomplete_6_addresses_6_linkage": "the combination meant to be absent was instantiated after all; the fixture source is wrong",
+    "incomplete_6_addresses_5_linkage": "one mono instance was duplicated across codegen units; the missing combination is still missing, but the control still fails"
+  },
+  "axes": {
+    "complete": {
+      "variant_counts": [2, 3],
+      "expected_combinations": 6,
+      "observed_combinations": 6,
+      "complete": true,
+      "bijective": true,
+      "independent_axis_count": 2,
+      "selected_basis_status": "unique"
+    },
+    "incomplete": {
+      "variant_counts": [2, 3],
+      "expected_combinations": 6,
+      "observed_combinations": 5,
+      "complete": false,
+      "bijective": false,
+      "selected_basis": null
+    },
+    "same_axis": {
+      "varying_call_slots": 2,
+      "axis_count": 1,
+      "variant_counts": [2],
+      "selected_basis": null
+    }
+  },
+  "not_asserted": [
+    "Whether any callsite resolves as unresolved or filtered. Rust source cannot force angr to fail, so resolver state stays a synthetic-test concern and is only reported here, never used as a gate.",
+    "The names of the source type parameters. F7.3 recovers anonymous axes."
+  ]
+}

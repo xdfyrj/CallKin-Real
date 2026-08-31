@@ -1,4 +1,4 @@
-"""R3b: hand the frozen V1 exactly what it may see, and nothing else.
+"""R4: hand the frozen V1 exactly what it may see, and nothing else.
 
 The input is three files: `body.json`, `universe.json`, `relation.json`. There
 is no fixture, no ground truth, no `users.json` and no FLIRT label, because on
@@ -59,6 +59,8 @@ class RealV1Input:
     """Everything the frozen V1 may see about one binary."""
 
     binary_sha256: str
+    #: sha256 of each stage file. `discovery` is the hash body and universe
+    #: both recorded, not a file this module read.
     stage_sha256: dict[str, str]
     #: member ids, sorted. The universe, before completeness is considered.
     members: tuple[str, ...]
@@ -126,13 +128,24 @@ def load_stage_artifacts(
         if missing:
             raise ArtifactChainError(f"{stage} does not name its {missing} input")
         for name, digest in recorded.items():
-            # `discovery` is not one of the three inputs, so its hash cannot be
-            # checked here; the ones that can be, are.
             if name in digests and digests[name] != digest:
                 raise ArtifactChainError(
                     f"{stage} was built from {name} {digest[:12]}, but the "
                     f"{name} artifact given is {digests[name][:12]}"
                 )
+
+    # The discovery file is not one of the three, but body and universe each
+    # record its hash, so it can still be carried and cross-checked. F7 needs
+    # it: the transfers it reads are the discovery payload.
+    claimed = {
+        stage: artifacts[stage]["inputs"]["discovery"]
+        for stage in ("body", "universe")
+    }
+    if len(set(claimed.values())) != 1:
+        raise ArtifactChainError(
+            f"body and universe name different discoveries: {claimed}"
+        )
+    digests["discovery"] = claimed["body"]
     return artifacts, digests
 
 

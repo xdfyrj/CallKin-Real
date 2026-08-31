@@ -1,4 +1,4 @@
-"""R3b: run the frozen F5 over CallKin-Real artifacts.
+"""R4: run the frozen F5 over CallKin-Real artifacts.
 
 Produces the three candidate artifacts the frozen V1 pipeline expects:
 
@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import callkin_real
 from real_v1_adapter import RealV1Input, load_from_run
 
 _FROZEN = Path(__file__).resolve().parent / "frozen_v1"
@@ -56,6 +57,26 @@ CANDIDATE_SCOPE = "subject"
 CANDIDATE_SCOPE_RULE = (
     "every internal function with a complete body, whatever its owner"
 )
+
+# F7 refuses a strict partition and a rescue queue whose provenance disagrees,
+# and it checks seven named fields. Five of them name oracle-pipeline artifacts,
+# but each has an exact counterpart here, so they are filled with the
+# counterpart rather than left absent -- an absent field makes the frozen check
+# raise, and a check that cannot run protects nothing.
+#
+#     stripped_sha256              the binary
+#     raw_graph_sha256             discovery.json, which is the raw graph
+#     candidate_selection_sha256   universe.json, which is the selection
+#     projection_config_sha256     the rules below, hashed
+#     anchor_policy                how fixed nodes were coloured
+#     edge_policy                  which transfers became edges
+#
+PROJECTION_RULES = {
+    "relation_mode": callkin_real.RELATION_MODE,
+    "grouping_role_rule": callkin_real.GROUPING_ROLE_RULE,
+    "edge_rule": callkin_real.EDGE_RULE,
+    "anchor_policy": callkin_real.ANCHOR_POLICY,
+}
 
 
 def _subject_metadata(binary_sha256: str) -> dict[str, str]:
@@ -95,6 +116,13 @@ def build_candidate_artifacts(
         "body_evidence_sha256": source.stage_sha256["body"],
         "universe_sha256": source.stage_sha256["universe"],
         "relation_sha256": source.stage_sha256["relation"],
+        # The seven fields F7 cross-checks. See PROJECTION_RULES.
+        "stripped_sha256": source.binary_sha256,
+        "raw_graph_sha256": source.stage_sha256["discovery"],
+        "candidate_selection_sha256": source.stage_sha256["universe"],
+        "projection_config_sha256": callkin_real.canonical_sha256(PROJECTION_RULES),
+        "anchor_policy": callkin_real.ANCHOR_POLICY,
+        "edge_policy": [callkin_real.EDGE_RULE],
         # Said plainly, because the four schema fields above cannot say it.
         "subject_metadata_observed": False,
         "candidate_scope_rule": CANDIDATE_SCOPE_RULE,

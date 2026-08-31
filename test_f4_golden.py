@@ -19,7 +19,12 @@ from pathlib import Path
 from body_comparison import METRIC_NAMES, QUALITY_NAMES, score_pair
 from body_similarity import parse_body
 
-FIXTURE_DIR = Path(__file__).resolve().parent / "tests" / "fixtures" / "f4_golden"
+# The frozen layout, because the frozen F7 control suite reads the same two
+# files from this path and a second copy could drift from the first.
+FIXTURE_DIR = (
+    Path(__file__).resolve().parent
+    / "frozen_v1" / "tests" / "fixtures" / "f7_alignment"
+)
 BODIES_PATH = FIXTURE_DIR / "ripgrep_219_bodies.json.gz"
 SCORES_PATH = FIXTURE_DIR / "ripgrep_556_scores.json"
 

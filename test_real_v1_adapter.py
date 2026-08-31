@@ -1,4 +1,4 @@
-"""R3b: the adapter hands over the universe, the bodies and the relation, only.
+"""R4: the adapter hands over the universe, the bodies and the relation, only.
 
 Two kinds of failure matter here and they fail differently. Handing the frozen
 V1 a label is a correctness failure that would produce a good-looking number,
