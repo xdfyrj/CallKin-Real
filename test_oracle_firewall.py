@@ -29,6 +29,7 @@ HERE = Path(__file__).resolve().parent
 # frozen module that imported an oracle would be just as fatal, and two of the
 # stubs there exist precisely because their originals did.
 ANALYSIS_ROOTS = (
+    "analyze.py",
     "callkin_real.py", "body_builder.py", "body_comparison.py",
     "real_v1_adapter.py", "v1_retrieval.py", "v1_grouping.py", "v1_rescue.py",
     "v1_relaxed.py",
