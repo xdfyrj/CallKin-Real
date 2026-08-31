@@ -306,6 +306,143 @@ def test_relaxed_budget_is_checked_before_any_comparison_runs():
     assert families == before
 
 
+def test_relaxed_policy_rejects_threshold_changes_before_comparison_runs():
+    import dataclasses
+
+    calls = []
+
+    def features(pair):
+        calls.append(pair)
+        return _match_features(pair)
+
+    try:
+        _module().evaluate_relaxed_pairs(
+            _families(provisional=(), unresolved=(C,)),
+            _consensus2(_candidate(A, C)),
+            {member: _body(member) for member in (A, B, C)},
+            dataclasses.replace(_formal_config(), structure_match_threshold=0.90),
+            {"strict-core": {"F1": (A, B)}},
+            feature_provider=features,
+        )
+    except ValueError as exc:
+        assert "frozen" in str(exc)
+    else:
+        raise AssertionError("relaxed evaluation accepted a changed threshold")
+    assert calls == []
+
+
+def test_relaxed_policy_rejects_raised_or_unbounded_budgets_before_comparison_runs():
+    import dataclasses
+
+    families = _families(provisional=(), unresolved=(C,))
+    candidates = _consensus2(_candidate(A, C))
+    bodies = {member: _body(member) for member in (A, B, C)}
+    partition = {"strict-core": {"F1": (A, B)}}
+    for overrides in (
+        {"max_comparison_count": 10001},
+        {"max_alignment_cell_budget": 500000001},
+        {"max_comparison_count": None},
+        {"max_alignment_cell_budget": None},
+    ):
+        calls = []
+
+        def features(pair, _calls=calls):
+            _calls.append(pair)
+            return _match_features(pair)
+
+        try:
+            _module().evaluate_relaxed_pairs(
+                families,
+                candidates,
+                bodies,
+                dataclasses.replace(_formal_config(), **overrides),
+                partition,
+                feature_provider=features,
+            )
+        except ValueError as exc:
+            assert "budget" in str(exc)
+        else:
+            raise AssertionError(f"relaxed evaluation accepted budget {overrides}")
+        assert calls == []
+
+
+def test_built_relaxed_artifact_scores_and_rejects_tampering():
+    import copy
+
+    families = _families(provisional=(), unresolved=(C,))
+    artifact, _ = _module().build_relaxed_artifacts(
+        families,
+        _consensus2(_candidate(A, C)),
+        {member: _body(member) for member in (A, B, C)},
+        _formal_config(),
+        family_artifact_sha256="d" * 64,
+        candidate_artifact_sha256="e" * 64,
+        feature_provider=_match_features,
+    )
+    groups = _module().groups_for_scoring(
+        artifact, families, family_artifact_sha256="d" * 64
+    )
+    assert sorted(groups) == sorted([[A, B], [A, B, C]])
+
+    tampered_attachment = copy.deepcopy(artifact)
+    tampered_attachment["attachments"][0]["support_pairs"] = []
+    try:
+        _module().groups_for_scoring(
+            tampered_attachment, families, family_artifact_sha256="d" * 64
+        )
+    except ValueError as exc:
+        assert "deterministic" in str(exc)
+    else:
+        raise AssertionError("tampered attachment was accepted")
+
+    tampered_decision = copy.deepcopy(artifact)
+    tampered_decision["pair_decisions"][0]["source"] = "on-demand"
+    try:
+        _module().groups_for_scoring(
+            tampered_decision, families, family_artifact_sha256="d" * 64
+        )
+    except ValueError as exc:
+        assert "deterministic" in str(exc)
+    else:
+        raise AssertionError("tampered pair decision was accepted")
+
+    tampered_hash = copy.deepcopy(artifact)
+    tampered_hash["provenance"]["family_artifact_sha256"] = "e" * 64
+    try:
+        _module().groups_for_scoring(
+            tampered_hash, families, family_artifact_sha256="d" * 64
+        )
+    except ValueError as exc:
+        assert "different family artifact" in str(exc)
+    else:
+        raise AssertionError("relaxed artifact from another strict run was accepted")
+
+
+def test_unsupported_rescue_input_is_rejected_before_comparison_runs():
+    calls = []
+
+    def features(pair):
+        calls.append(pair)
+        return _match_features(pair)
+
+    try:
+        _module().build_relaxed_artifacts(
+            _families(provisional=(), unresolved=(C,)),
+            _consensus2(_candidate(A, C)),
+            {member: _body(member) for member in (A, B, C)},
+            _formal_config(),
+            family_artifact_sha256="d" * 64,
+            candidate_artifact_sha256="e" * 64,
+            rescue_artifact_sha256="f" * 64,
+            feature_provider=features,
+        )
+    except NotImplementedError as exc:
+        assert "F7" in str(exc)
+    else:
+        raise AssertionError("unsupported rescue input was evaluated")
+    assert calls == []
+
+
 def test_unknown_does_not_veto_one_strong_core_attachment():
     relaxed = _module().build_provisional_artifact(
         _families(
@@ -529,6 +666,10 @@ def main() -> int:
     test_abstain_member_is_not_a_relaxed_candidate()
     test_on_demand_match_without_candidate_match_does_not_attach()
     test_relaxed_budget_is_checked_before_any_comparison_runs()
+    test_relaxed_policy_rejects_threshold_changes_before_comparison_runs()
+    test_relaxed_policy_rejects_raised_or_unbounded_budgets_before_comparison_runs()
+    test_built_relaxed_artifact_scores_and_rejects_tampering()
+    test_unsupported_rescue_input_is_rejected_before_comparison_runs()
     test_unknown_does_not_veto_one_strong_core_attachment()
     test_a_hard_reject_vetoes_the_attachment()
     test_an_on_demand_match_is_not_independent_retrieval_support()

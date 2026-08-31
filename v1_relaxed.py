@@ -39,12 +39,48 @@ RULE_VERSION = "strict-core-attachment-v1"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _DECISIONS = {"match", "reject", "unknown", "abstain"}
 _SOURCES = {"candidate", "on-demand"}
+_FORMAL_POLICY = {
+    "version": "v1",
+    "structure_match_threshold": 0.95,
+    "slot_match_threshold": 1.0,
+    "structure_reject_threshold": None,
+    "require_informative_slot": True,
+    "abstain_on_opaque_indirect": True,
+}
+_MAX_COMPARISONS = 10_000
+_MAX_ALIGNMENT_CELLS = 500_000_000
 
 
 def _digest(value: str, where: str) -> str:
     if not isinstance(value, str) or not _SHA256.fullmatch(value):
         raise ValueError(f"{where} must be a SHA-256 digest")
     return value
+
+
+def _validate_relaxed_config(config: PairPolicyConfig) -> None:
+    """Require the frozen formal policy, allowing only lower test ceilings."""
+    if not isinstance(config, PairPolicyConfig):
+        raise ValueError("relaxed evaluation requires a PairPolicyConfig")
+    for name, expected in _FORMAL_POLICY.items():
+        if getattr(config, name) != expected:
+            raise ValueError(
+                f"relaxed evaluation requires frozen {name}={expected!r}"
+            )
+    for name, ceiling in (
+        ("max_comparison_count", _MAX_COMPARISONS),
+        ("max_alignment_cell_budget", _MAX_ALIGNMENT_CELLS),
+    ):
+        value = getattr(config, name)
+        if (
+            value is None
+            or isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value > ceiling
+        ):
+            raise ValueError(
+                f"relaxed {name} budget must be an integer in [0, {ceiling}]"
+            )
 
 
 def _pair(first: str, second: str) -> tuple[str, str]:
@@ -116,38 +152,58 @@ def _strict_view(
     if seen != buckets["accepted"]:
         raise ValueError("strict accepted clusters do not cover accepted members")
 
-    decisions: dict[tuple[str, str], Mapping[str, Any]] = {}
-    for record in family_artifact.get("pair_decisions", []):
-        members = record.get("pair")
-        if not isinstance(members, list) or len(members) != 2:
-            raise ValueError("strict pair decision has an invalid pair")
-        pair = _pair(*members)
-        if pair in decisions:
-            raise ValueError(f"duplicate strict pair decision: {list(pair)}")
-        if record.get("decision") not in _DECISIONS:
-            raise ValueError("strict pair decision has an invalid decision")
-        if record.get("source") not in _SOURCES:
-            raise ValueError("strict pair decision has an invalid source")
-        decisions[pair] = record
+    decisions = _parse_pair_decisions(family_artifact.get("pair_decisions", []))
     candidates = buckets["provisional"] | buckets["unresolved"]
     return cores, sorted(candidates), decisions
 
 
-def build_provisional_artifact(
-    family_artifact: Mapping[str, Any],
-    *,
-    family_artifact_sha256: str,
-) -> dict[str, Any]:
-    """Build auditable, non-transitive attachments around strict cores."""
-    strict_sha = _digest(family_artifact_sha256, "family_artifact_sha256")
-    cores, provisional, decisions = _strict_view(family_artifact)
+def _parse_pair_decisions(
+    records: Any,
+) -> dict[tuple[str, str], Mapping[str, Any]]:
+    if not isinstance(records, list):
+        raise ValueError("pair decisions must be a list")
+    decisions: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError("pair decision must be an object")
+        members = record.get("pair")
+        if not isinstance(members, list) or len(members) != 2:
+            raise ValueError("pair decision has an invalid pair")
+        pair = _pair(*members)
+        if pair in decisions:
+            raise ValueError(f"duplicate pair decision: {list(pair)}")
+        if record.get("decision") not in _DECISIONS:
+            raise ValueError("pair decision has an invalid decision")
+        if record.get("source") not in _SOURCES:
+            raise ValueError("pair decision has an invalid source")
+        decisions[pair] = record
+    return decisions
+
+
+def _pair_decisions_digest(records: Sequence[Mapping[str, Any]]) -> str:
+    encoded = json.dumps(
+        list(records), ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _attachment_outputs(
+    cores: Mapping[str, tuple[str, ...]],
+    candidates: Sequence[str],
+    decisions: Mapping[tuple[str, str], Mapping[str, Any]],
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[str],
+]:
+    """Derive attachment outcomes from a complete relaxed decision table."""
     core_of = {
         member: identifier
         for identifier, members in cores.items()
         for member in members
     }
-
-    candidate_cores: dict[str, set[str]] = {member: set() for member in provisional}
+    candidate_cores: dict[str, set[str]] = {member: set() for member in candidates}
     for pair, record in decisions.items():
         if record["decision"] != "match" or record["source"] != "candidate":
             continue
@@ -161,7 +217,7 @@ def build_provisional_artifact(
     ambiguous: list[dict[str, Any]] = []
     vetoed: list[dict[str, Any]] = []
     unassigned: list[str] = []
-    for member in provisional:
+    for member in candidates:
         eligible: list[tuple[str, dict[str, list[list[str]]]]] = []
         for identifier in sorted(candidate_cores[member]):
             evidence = {
@@ -207,6 +263,20 @@ def build_provisional_artifact(
             })
         else:
             unassigned.append(member)
+    return attachments, ambiguous, vetoed, unassigned
+
+
+def build_provisional_artifact(
+    family_artifact: Mapping[str, Any],
+    *,
+    family_artifact_sha256: str,
+) -> dict[str, Any]:
+    """Build auditable, non-transitive attachments around strict cores."""
+    strict_sha = _digest(family_artifact_sha256, "family_artifact_sha256")
+    cores, provisional, decisions = _strict_view(family_artifact)
+    attachments, ambiguous, vetoed, unassigned = _attachment_outputs(
+        cores, provisional, decisions
+    )
 
     provenance = family_artifact.get("provenance")
     if not isinstance(provenance, Mapping):
@@ -512,6 +582,7 @@ def evaluate_relaxed_pairs(
     one budget gate.  No feature provider or body alignment is invoked until
     the complete union has been priced successfully.
     """
+    _validate_relaxed_config(config)
     _check_relaxed_inputs(family_artifact, candidate_artifact)
     possible = possible_cross_pairs(
         family_artifact, candidate_artifact, core_partitions
@@ -551,6 +622,9 @@ def build_relaxed_artifacts(
     candidate_sha = _digest(
         candidate_artifact_sha256, "candidate_artifact_sha256"
     )
+    if rescue_artifact is not None or rescue_artifact_sha256 is not None:
+        raise NotImplementedError("F7-core relaxed attachments are not implemented")
+    _validate_relaxed_config(config)
     cores, _, _ = _strict_view(family_artifact)
     evaluations, accounting = evaluate_relaxed_pairs(
         family_artifact,
@@ -573,10 +647,105 @@ def build_relaxed_artifacts(
         "consensus2 candidate match under the frozen formal pair policy"
     )
     strict["pair_decisions"] = [item.to_dict() for item in evaluations]
+    strict["provenance"]["relaxed_pair_decisions_sha256"] = _pair_decisions_digest(
+        strict["pair_decisions"]
+    )
     strict["metrics"] = accounting
-    if rescue_artifact is not None or rescue_artifact_sha256 is not None:
-        raise NotImplementedError("F7-core relaxed attachments are not implemented")
     return strict, None
+
+
+def _validate_relaxed_artifact(
+    artifact: Mapping[str, Any],
+    family_artifact: Mapping[str, Any],
+    family_artifact_sha256: str,
+) -> tuple[dict[str, tuple[str, ...]], list[dict[str, Any]]]:
+    """Validate a generated strict-core relaxed artifact without F4 inputs."""
+    strict_sha = _digest(family_artifact_sha256, "family_artifact_sha256")
+    if artifact.get("artifact") != ARTIFACT:
+        raise ValueError("relaxed artifact has an unsupported artifact name")
+    if artifact.get("rule_version") != "consensus2-strict-core-attachment-v2":
+        raise ValueError("relaxed artifact does not match the deterministic rule")
+    if artifact.get("partition") != "strict-core":
+        raise ValueError("relaxed artifact does not match the deterministic rule")
+    cores, candidates, _ = _strict_view(family_artifact)
+
+    for key in ("case", "build", "profile", "scope"):
+        if artifact.get(key) != family_artifact.get(key):
+            raise ValueError("relaxed artifact does not match the deterministic rule")
+    provenance = artifact.get("provenance")
+    family_provenance = family_artifact.get("provenance")
+    if not isinstance(provenance, Mapping) or not isinstance(
+        family_provenance, Mapping
+    ):
+        raise ValueError("relaxed artifact does not match the deterministic rule")
+    if provenance.get("family_artifact_sha256") != strict_sha:
+        raise ValueError("relaxed artifact was built from a different family artifact")
+    for key in ("stripped_sha256", "body_evidence_sha256"):
+        if provenance.get(key) != family_provenance.get(key):
+            raise ValueError("relaxed artifact does not match the deterministic rule")
+        _digest(provenance.get(key), f"relaxed provenance.{key}")
+    _digest(
+        provenance.get("relaxed_candidate_artifact_sha256"),
+        "relaxed provenance.relaxed_candidate_artifact_sha256",
+    )
+
+    strict_partition = [
+        {"id": identifier, "members": list(members)}
+        for identifier, members in sorted(cores.items())
+    ]
+    if artifact.get("strict_partition") != strict_partition:
+        raise ValueError("relaxed artifact does not match the deterministic rule")
+
+    records = artifact.get("pair_decisions")
+    decisions = _parse_pair_decisions(records)
+    if not isinstance(records, list) or records != [
+        decisions[pair] for pair in sorted(decisions)
+    ]:
+        raise ValueError("relaxed artifact does not match the deterministic rule")
+    for record in records:
+        if not isinstance(record.get("features"), Mapping):
+            raise ValueError("relaxed artifact does not match the deterministic rule")
+    expected_digest = provenance.get("relaxed_pair_decisions_sha256")
+    if not isinstance(expected_digest, str) or expected_digest != _pair_decisions_digest(
+        records
+    ):
+        raise ValueError("relaxed artifact does not match the deterministic rule")
+
+    attachments, ambiguous, vetoed, unassigned = _attachment_outputs(
+        cores, candidates, decisions
+    )
+    expected_fields = {
+        "attachments": sorted(attachments, key=lambda item: item["member"]),
+        "ambiguous_members": sorted(ambiguous, key=lambda item: item["member"]),
+        "vetoed_hypotheses": sorted(
+            vetoed, key=lambda item: (item["member"], item["family_id"])
+        ),
+        "unassigned_members": sorted(unassigned),
+    }
+    for key, expected in expected_fields.items():
+        if artifact.get(key) != expected:
+            raise ValueError("relaxed artifact does not match the deterministic rule")
+    summary = artifact.get("summary")
+    if not isinstance(summary, Mapping):
+        raise ValueError("relaxed artifact does not match the deterministic rule")
+    expected_summary = {
+        "strict_family_count": len(cores),
+        "strict_accepted_member_count": sum(len(members) for members in cores.values()),
+        "input_provisional_member_count": len(
+            family_artifact["status_members"]["provisional"]
+        ),
+        "input_unresolved_member_count": len(
+            family_artifact["status_members"]["unresolved"]
+        ),
+        "candidate_member_count": len(candidates),
+        "attached_member_count": len(expected_fields["attachments"]),
+        "ambiguous_member_count": len(expected_fields["ambiguous_members"]),
+        "vetoed_hypothesis_count": len(expected_fields["vetoed_hypotheses"]),
+        "unassigned_member_count": len(expected_fields["unassigned_members"]),
+    }
+    if any(summary.get(key) != value for key, value in expected_summary.items()):
+        raise ValueError("relaxed artifact does not match the deterministic rule")
+    return cores, expected_fields["attachments"]
 
 
 def groups_for_scoring(
@@ -586,25 +755,32 @@ def groups_for_scoring(
     family_artifact_sha256: str,
 ) -> list[list[str]]:
     """Validate the artifact and return strict plus one-member hypotheses."""
-    expected = build_provisional_artifact(
-        family_artifact,
-        family_artifact_sha256=family_artifact_sha256,
-    )
-    if artifact != expected:
-        recorded = (artifact.get("provenance") or {}).get("family_artifact_sha256")
-        if recorded != family_artifact_sha256:
-            raise ValueError(
-                "relaxed artifact was built from a different family artifact"
-            )
-        raise ValueError("relaxed artifact does not match the deterministic rule")
-    cores = {
-        item["id"]: sorted(item["members"])
-        for item in artifact["strict_partition"]
-    }
+    if artifact.get("rule_version") == "consensus2-strict-core-attachment-v2":
+        cores, attachments = _validate_relaxed_artifact(
+            artifact, family_artifact, family_artifact_sha256
+        )
+        cores = {identifier: sorted(members) for identifier, members in cores.items()}
+    else:
+        expected = build_provisional_artifact(
+            family_artifact,
+            family_artifact_sha256=family_artifact_sha256,
+        )
+        if artifact != expected:
+            recorded = (artifact.get("provenance") or {}).get("family_artifact_sha256")
+            if recorded != family_artifact_sha256:
+                raise ValueError(
+                    "relaxed artifact was built from a different family artifact"
+                )
+            raise ValueError("relaxed artifact does not match the deterministic rule")
+        cores = {
+            item["id"]: sorted(item["members"])
+            for item in artifact["strict_partition"]
+        }
+        attachments = artifact["attachments"]
     groups = [members for _, members in sorted(cores.items())]
     groups.extend(
         sorted(cores[item["family_id"]] + [item["member"]])
-        for item in artifact["attachments"]
+        for item in attachments
     )
     return groups
 
