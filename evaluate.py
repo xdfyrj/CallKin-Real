@@ -544,6 +544,7 @@ def load_neutral_pairs(
             raise EvaluationError("linkage audit addresses overlay is malformed")
         identities = record.get("identities")
         origins = record.get("origins")
+        raw_symbols = record.get("raw_symbols")
         if not isinstance(identities, list) or not all(
             isinstance(item, str) for item in identities
         ):
@@ -555,6 +556,12 @@ def load_neutral_pairs(
         ):
             raise EvaluationError(
                 f"linkage audit address {function_id!r} has invalid origins"
+            )
+        if not isinstance(raw_symbols, list) or not all(
+            isinstance(item, str) for item in raw_symbols
+        ):
+            raise EvaluationError(
+                f"linkage audit address {function_id!r} has invalid raw_symbols"
             )
         records[function_id] = {"identities": identities, "origins": origins}
 

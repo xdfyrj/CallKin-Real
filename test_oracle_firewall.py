@@ -456,6 +456,22 @@ def test_linkage_audit_without_usable_addresses_is_refused():
             raise AssertionError("empty/no-op linkage audit was accepted")
 
 
+def test_malformed_address_record_is_refused():
+    with tempfile.TemporaryDirectory(prefix="callkin-eval-") as directory:
+        room = Path(directory)
+        run_path, gt_path = _fixture(room)
+        audit = _addresses_audit(room, gt_path)
+        data = json.loads(audit.read_text(encoding="utf-8"))
+        del data["addresses"]["FUN_00101000"]["raw_symbols"]
+        callkin_real.write_json(audit, data)
+        try:
+            evaluator.evaluate(run_path, gt_path, linkage_audit=audit)
+        except evaluator.EvaluationError as exc:
+            assert "raw_symbols" in str(exc)
+        else:
+            raise AssertionError("malformed linkage address record was accepted")
+
+
 def main() -> int:
     note = test_no_analysis_module_can_import_an_oracle()
     test_the_analyze_parser_has_no_oracle_argument()
@@ -471,6 +487,7 @@ def main() -> int:
     test_linkage_audit_ground_truth_digest_mismatch_is_refused()
     test_linkage_audit_wrong_binary_is_refused()
     test_linkage_audit_without_usable_addresses_is_refused()
+    test_malformed_address_record_is_refused()
     print("CallKin-Real oracle firewall: PASS")
     print(note)
     return 0
