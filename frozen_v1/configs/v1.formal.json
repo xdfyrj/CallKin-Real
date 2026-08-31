@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "version": "v1",
+  "policy": {
+    "structure_match_threshold": 0.95,
+    "slot_match_threshold": 1.0,
+    "structure_reject_threshold": null,
+    "require_informative_slot": true,
+    "abstain_on_opaque_indirect": true,
+    "max_comparison_count": 10000,
+    "max_alignment_cell_budget": 500000000
+  }
+}
