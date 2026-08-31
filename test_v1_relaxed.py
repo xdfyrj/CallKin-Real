@@ -68,6 +68,11 @@ def _families(
             "stripped_sha256": "a" * 64,
             "body_evidence_sha256": "b" * 64,
             "candidate_artifact_sha256": "c" * 64,
+            "raw_graph_sha256": "1" * 64,
+            "candidate_selection_sha256": "2" * 64,
+            "projection_config_sha256": "3" * 64,
+            "anchor_policy": "fixed",
+            "edge_policy": ["direct"],
             "candidate_derivation": {
                 "kind": "minimum-view-consensus",
                 "minimum_view_count": 3,
@@ -134,6 +139,11 @@ def _consensus2(*pairs, targets=(A, B, C)):
         "provenance": {
             "stripped_sha256": "a" * 64,
             "body_evidence_sha256": "b" * 64,
+            "raw_graph_sha256": "1" * 64,
+            "candidate_selection_sha256": "2" * 64,
+            "projection_config_sha256": "3" * 64,
+            "anchor_policy": "fixed",
+            "edge_policy": ["direct"],
             "candidate_derivation": {
                 "kind": "minimum-view-consensus",
                 "minimum_view_count": 2,
@@ -171,8 +181,29 @@ def _rescue_that_merges_the_two_cores(families):
             "family_artifact_sha256": "d" * 64,
             "candidate_artifact_sha256": "e" * 64,
             "body_evidence_sha256": families["provenance"]["body_evidence_sha256"],
-            "raw_graph_sha256": "f" * 64,
+            "raw_graph_sha256": families["provenance"]["raw_graph_sha256"],
         },
+        "verified_provenance": {
+            "stripped_sha256": families["provenance"]["stripped_sha256"],
+            "body_evidence_sha256": families["provenance"]["body_evidence_sha256"],
+            "raw_graph_sha256": families["provenance"]["raw_graph_sha256"],
+            "candidate_selection_sha256": families["provenance"][
+                "candidate_selection_sha256"
+            ],
+            "projection_config_sha256": families["provenance"][
+                "projection_config_sha256"
+            ],
+            "anchor_policy": families["provenance"]["anchor_policy"],
+            "edge_policy": families["provenance"]["edge_policy"],
+            "target_count": len(families["universe"]["target_ids"]),
+        },
+        "budget": {
+            "max_component_members": 64,
+            "max_comparisons": 4096,
+            "max_alignment_cells": 500000000,
+        },
+        "summary": {},
+        "components": [],
         "strict_partition": [
             {"id": "F1", "members": [A, B]},
             {"id": "F2", "members": [D, E]},
@@ -202,6 +233,37 @@ def _build_two_core_variants(rescue):
     )
 
 
+def _expect_rescue_rejected(rescue, message):
+    families = _two_core_families(C)
+    calls = []
+
+    def features(pair):
+        calls.append(pair)
+        return _match_features(pair)
+
+    try:
+        _module().build_relaxed_artifacts(
+            families,
+            _consensus2(
+                _candidate(A, C),
+                _candidate(D, C),
+                targets=(A, B, C, D, E),
+            ),
+            _bodies(A, B, C, D),
+            _formal_config(),
+            family_artifact_sha256="d" * 64,
+            candidate_artifact_sha256="e" * 64,
+            rescue_artifact=rescue,
+            rescue_artifact_sha256="f" * 64,
+            feature_provider=features,
+        )
+    except ValueError as exc:
+        assert message in str(exc), str(exc)
+    else:
+        raise AssertionError("malformed rescue artifact was accepted")
+    assert calls == []
+
+
 def _unchanged_rescue(families):
     return {
         "artifact": "v1-family-rescue",
@@ -216,8 +278,29 @@ def _unchanged_rescue(families):
             "family_artifact_sha256": "d" * 64,
             "candidate_artifact_sha256": "e" * 64,
             "body_evidence_sha256": families["provenance"]["body_evidence_sha256"],
-            "raw_graph_sha256": "f" * 64,
+            "raw_graph_sha256": families["provenance"]["raw_graph_sha256"],
         },
+        "verified_provenance": {
+            "stripped_sha256": families["provenance"]["stripped_sha256"],
+            "body_evidence_sha256": families["provenance"]["body_evidence_sha256"],
+            "raw_graph_sha256": families["provenance"]["raw_graph_sha256"],
+            "candidate_selection_sha256": families["provenance"][
+                "candidate_selection_sha256"
+            ],
+            "projection_config_sha256": families["provenance"][
+                "projection_config_sha256"
+            ],
+            "anchor_policy": families["provenance"]["anchor_policy"],
+            "edge_policy": families["provenance"]["edge_policy"],
+            "target_count": len(families["universe"]["target_ids"]),
+        },
+        "budget": {
+            "max_component_members": 64,
+            "max_comparisons": 4096,
+            "max_alignment_cells": 500000000,
+        },
+        "summary": {},
+        "components": [],
         "strict_partition": [{"id": "F1", "members": [A, B]}],
         "final_partition": [
             {"id": "F1", "members": [A, B], "origin": "strict"},
@@ -302,8 +385,122 @@ def test_f7_merge_can_turn_two_strict_cores_into_one_attachment_target():
         rescue_artifact_sha256="f" * 64,
         feature_provider=_match_features,
     )
+    assert "rescue_artifact_sha256" not in strict["provenance"]
     assert strict["summary"]["ambiguous_member_count"] == 1
     assert after_f7["summary"]["attached_member_count"] == 1
+
+
+def test_rescue_wrong_or_missing_rule_is_refused_before_comparison_runs():
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    rescue["rescue_rule_version"] = "not-f7-rescue-v1"
+    _expect_rescue_rejected(rescue, "rescue rule version")
+
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    del rescue["rescue_rule_version"]
+    _expect_rescue_rejected(rescue, "schema")
+
+
+def test_rescue_verified_provenance_drift_or_missing_is_refused_before_comparison_runs():
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    rescue["verified_provenance"]["raw_graph_sha256"] = "0" * 64
+    _expect_rescue_rejected(rescue, "provenance mismatch")
+
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    del rescue["verified_provenance"]
+    _expect_rescue_rejected(rescue, "schema")
+
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    rescue["verified_provenance"]["unexpected"] = True
+    _expect_rescue_rejected(rescue, "verified_provenance")
+
+
+def test_rescue_ground_truth_policy_drift_is_refused_before_comparison_runs():
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    rescue["ground_truth"] = {"used_for": "evaluation"}
+    _expect_rescue_rejected(rescue, "ground_truth policy")
+
+
+def test_rescue_provenance_mismatches_are_refused_before_comparison_runs():
+    for field, message in (
+        ("family_artifact_sha256", "another strict"),
+        ("candidate_artifact_sha256", "another candidate"),
+        ("body_evidence_sha256", "provenance mismatch"),
+        ("raw_graph_sha256", "provenance mismatch"),
+    ):
+        rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+        rescue["provenance"][field] = "0" * 64
+        _expect_rescue_rejected(rescue, message)
+
+
+def test_rescue_schema_missing_or_extra_fields_is_refused_before_comparison_runs():
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    del rescue["components"]
+    _expect_rescue_rejected(rescue, "schema")
+
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    rescue["unexpected"] = True
+    _expect_rescue_rejected(rescue, "schema")
+
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    del rescue["provenance"]["raw_graph_sha256"]
+    _expect_rescue_rejected(rescue, "provenance")
+
+    rescue = _rescue_that_merges_the_two_cores(_two_core_families(C))
+    rescue["provenance"]["unexpected"] = "x"
+    _expect_rescue_rejected(rescue, "provenance")
+
+
+def test_f7_scoring_requires_the_validated_rescue_and_actual_hash():
+    families = _two_core_families(C)
+    rescue = _rescue_that_merges_the_two_cores(families)
+    strict, after_f7 = _build_two_core_variants(rescue)
+    assert after_f7 is not None
+
+    try:
+        _module().groups_for_scoring(
+            after_f7, families, family_artifact_sha256="d" * 64
+        )
+    except ValueError as exc:
+        assert "rescue" in str(exc)
+    else:
+        raise AssertionError("F7 artifact was scored without its rescue artifact")
+
+    try:
+        _module().groups_for_scoring(
+            after_f7,
+            families,
+            family_artifact_sha256="d" * 64,
+            rescue_artifact=rescue,
+            rescue_artifact_sha256="0" * 64,
+        )
+    except ValueError as exc:
+        assert "rescue artifact" in str(exc)
+    else:
+        raise AssertionError("F7 artifact was scored with the wrong rescue hash")
+
+    wrong_rescue = copy.deepcopy(rescue)
+    wrong_rescue["final_partition"][0]["members"] = [A, B]
+    try:
+        _module().groups_for_scoring(
+            after_f7,
+            families,
+            family_artifact_sha256="d" * 64,
+            rescue_artifact=wrong_rescue,
+            rescue_artifact_sha256="f" * 64,
+        )
+    except ValueError as exc:
+        assert "partition" in str(exc)
+    else:
+        raise AssertionError("F7 artifact was scored with a wrong rescue object")
+
+    groups = _module().groups_for_scoring(
+        after_f7,
+        families,
+        family_artifact_sha256="d" * 64,
+        rescue_artifact=rescue,
+        rescue_artifact_sha256="f" * 64,
+    )
+    assert sorted(groups) == sorted([[A, B, D, E], [A, B, C, D, E]])
 
 
 def test_rescue_from_another_strict_hash_is_refused():
@@ -331,9 +528,19 @@ def test_rescue_strict_partition_drift_is_refused():
 def test_two_attachments_never_create_a_pair_between_singletons():
     families = _families(provisional=(), unresolved=(C, D))
     strict, after_f7 = _build_two_attachment_variants()
+    rescue = _unchanged_rescue(families)
     for artifact in (strict, after_f7):
+        rescue_kwargs = {}
+        if artifact["partition"] == "f7-core":
+            rescue_kwargs = {
+                "rescue_artifact": rescue,
+                "rescue_artifact_sha256": "f" * 64,
+            }
         groups = _module().groups_for_scoring(
-            artifact, families, family_artifact_sha256="d" * 64
+            artifact,
+            families,
+            family_artifact_sha256="d" * 64,
+            **rescue_kwargs,
         )
         assert [A, B, C, D] not in groups
 
@@ -811,6 +1018,15 @@ def test_relaxed_artifact_is_refused_as_a_flirt_propagation_partition():
 
 def main() -> int:
     test_f7_merge_can_turn_two_strict_cores_into_one_attachment_target()
+    test_rescue_from_another_strict_hash_is_refused()
+    test_rescue_strict_partition_drift_is_refused()
+    test_two_attachments_never_create_a_pair_between_singletons()
+    test_rescue_wrong_or_missing_rule_is_refused_before_comparison_runs()
+    test_rescue_verified_provenance_drift_or_missing_is_refused_before_comparison_runs()
+    test_rescue_ground_truth_policy_drift_is_refused_before_comparison_runs()
+    test_rescue_provenance_mismatches_are_refused_before_comparison_runs()
+    test_rescue_schema_missing_or_extra_fields_is_refused_before_comparison_runs()
+    test_f7_scoring_requires_the_validated_rescue_and_actual_hash()
     test_evaluate_relaxed_pairs_returns_shared_decisions_and_accounting()
     test_unresolved_member_uses_a_consensus2_candidate_match()
     test_abstain_member_is_not_a_relaxed_candidate()

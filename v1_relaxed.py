@@ -52,6 +52,38 @@ _FORMAL_POLICY = {
 }
 _MAX_COMPARISONS = 10_000
 _MAX_ALIGNMENT_CELLS = 500_000_000
+_RESCUE_FIELDS = {
+    "artifact",
+    "schema_version",
+    "rescue_rule_version",
+    "case",
+    "build",
+    "profile",
+    "scope",
+    "ground_truth",
+    "provenance",
+    "verified_provenance",
+    "budget",
+    "summary",
+    "strict_partition",
+    "final_partition",
+    "components",
+}
+_RESCUE_PROVENANCE_FIELDS = {
+    "family_artifact_sha256",
+    "candidate_artifact_sha256",
+    "body_evidence_sha256",
+    "raw_graph_sha256",
+}
+_RESCUE_SHARED_PROVENANCE = (
+    "stripped_sha256",
+    "body_evidence_sha256",
+    "raw_graph_sha256",
+    "candidate_selection_sha256",
+    "projection_config_sha256",
+    "anchor_policy",
+    "edge_policy",
+)
 
 
 def _digest(value: str, where: str) -> str:
@@ -103,96 +135,99 @@ def _partition_mapping(
 def _validate_rescue_provenance(
     rescue: Mapping[str, Any],
     family_artifact: Mapping[str, Any],
-    candidate_artifact: Mapping[str, Any],
+    candidate_artifact: Mapping[str, Any] | None,
     family_sha: str,
-    candidate_sha: str,
-    rescue_sha: str | None = None,
+    candidate_sha: str | None,
 ) -> None:
+    """Apply the frozen F7 rescue schema/provenance checks locally.
+
+    This intentionally mirrors the frozen validator's fail-closed contract
+    without importing its propagation/oracle path.  The rescue bytes' actual
+    SHA is validated by the caller before this function is reached.
+    """
+    if set(rescue) != _RESCUE_FIELDS:
+        raise ValueError("unsupported v1 family rescue artifact schema")
+    if rescue.get("artifact") != "v1-family-rescue":
+        raise ValueError("expected a v1-family-rescue artifact")
+    if rescue.get("schema_version") != 1:
+        raise ValueError("unsupported v1 family rescue artifact")
+    if rescue.get("rescue_rule_version") != "f7-rescue-v1":
+        raise ValueError("unsupported v1 family rescue rule version")
+    for key in ("case", "build", "profile", "scope"):
+        value = rescue.get(key)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"rescue artifact.{key} must be a non-empty string")
+        if value != family_artifact.get(key):
+            raise ValueError(f"family and rescue artifacts disagree on {key}")
+
     provenance = rescue.get("provenance")
-    if not isinstance(provenance, Mapping):
-        raise ValueError("rescue artifact provenance is missing")
-
-    declared_rescue_sha = provenance.get("rescue_artifact_sha256")
-    if declared_rescue_sha is not None:
-        _digest(declared_rescue_sha, "rescue provenance.rescue_artifact_sha256")
-        if rescue_sha is not None and declared_rescue_sha != rescue_sha:
-            raise ValueError("rescue artifact SHA-256 does not match its provenance")
-
-    family_recorded = provenance.get("family_artifact_sha256")
-    if family_recorded != family_sha:
+    if (
+        not isinstance(provenance, Mapping)
+        or set(provenance) != _RESCUE_PROVENANCE_FIELDS
+    ):
+        raise ValueError("rescue artifact provenance must be an object")
+    for key, value in provenance.items():
+        _digest(value, f"rescue artifact provenance.{key}")
+    if provenance["family_artifact_sha256"] != family_sha:
         raise ValueError("rescue was built from another strict family artifact")
-    _digest(family_recorded, "rescue provenance.family_artifact_sha256")
-
-    # F7's writer records these three upstream hashes.  Check every one that
-    # is present while retaining compatibility with the small control
-    # fixtures used by the frozen rescue tests.
-    candidate_recorded = provenance.get("candidate_artifact_sha256")
-    if candidate_recorded is not None:
-        _digest(candidate_recorded, "rescue provenance.candidate_artifact_sha256")
-        if candidate_recorded != candidate_sha:
-            raise ValueError("rescue was built from another candidate artifact")
+    if (
+        candidate_sha is not None
+        and provenance["candidate_artifact_sha256"] != candidate_sha
+    ):
+        raise ValueError("rescue was built from another candidate artifact")
 
     family_provenance = family_artifact.get("provenance")
-    candidate_provenance = candidate_artifact.get("provenance")
-    if not isinstance(family_provenance, Mapping) or not isinstance(
-        candidate_provenance, Mapping
-    ):
-        raise ValueError("rescue upstream provenance is missing")
-    for key in ("stripped_sha256", "body_evidence_sha256"):
+    if not isinstance(family_provenance, Mapping):
+        raise ValueError("strict artifact provenance is missing")
+    for key in _RESCUE_SHARED_PROVENANCE:
         expected = family_provenance.get(key)
         if expected is None:
-            continue
-        expected = _digest(expected, f"strict provenance.{key}")
-        candidate_expected = candidate_provenance.get(key)
-        if candidate_expected is not None and _digest(
-            candidate_expected, f"candidate provenance.{key}"
-        ) != expected:
-            raise ValueError(f"strict/candidate {key} mismatch")
-        recorded = provenance.get(key)
-        if recorded is not None and _digest(
-            recorded, f"rescue provenance.{key}"
-        ) != expected:
-            raise ValueError(f"family/rescue provenance mismatch on {key}")
-
-    for key in (
-        "raw_graph_sha256",
-        "candidate_selection_sha256",
-        "projection_config_sha256",
-    ):
-        recorded = provenance.get(key)
-        expected = family_provenance.get(key)
-        if expected is None:
-            expected = candidate_provenance.get(key)
-        if recorded is not None and expected is not None:
-            if _digest(recorded, f"rescue provenance.{key}") != _digest(
-                expected, f"upstream provenance.{key}"
-            ):
-                raise ValueError(f"family/rescue provenance mismatch on {key}")
-
-    for key, value in provenance.items():
+            raise ValueError(f"strict provenance.{key} is missing")
         if key.endswith("_sha256"):
-            _digest(value, f"rescue provenance.{key}")
+            _digest(expected, f"strict provenance.{key}")
 
     verified = rescue.get("verified_provenance")
-    if verified is not None:
-        if not isinstance(verified, Mapping):
-            raise ValueError("rescue verified_provenance is invalid")
-        target_count = verified.get("target_count")
-        target_ids = family_artifact.get("universe", {}).get("target_ids")
-        if target_count is not None and target_count != len(target_ids or []):
-            raise ValueError("family/rescue target_count mismatch")
-        for key in (
-            "stripped_sha256",
-            "body_evidence_sha256",
-            "raw_graph_sha256",
-            "candidate_selection_sha256",
-            "projection_config_sha256",
-            "anchor_policy",
-            "edge_policy",
-        ):
-            if key in verified and key in family_provenance:
-                if verified[key] != family_provenance[key]:
-                    raise ValueError(f"family/rescue provenance mismatch on {key}")
+    if (
+        not isinstance(verified, Mapping)
+        or set(verified) != set(_RESCUE_SHARED_PROVENANCE) | {"target_count"}
+    ):
+        raise ValueError("rescue artifact verified_provenance has an invalid field set")
+    for key in _RESCUE_SHARED_PROVENANCE:
+        if verified[key] != family_provenance[key]:
+            raise ValueError(f"family/rescue provenance mismatch on {key}")
+    target_ids = (family_artifact.get("universe") or {}).get("target_ids")
+    if not isinstance(target_ids, list):
+        raise ValueError("strict artifact universe is missing")
+    if verified["target_count"] != len(target_ids):
+        raise ValueError("family/rescue target_count mismatch")
+    if provenance["body_evidence_sha256"] != verified["body_evidence_sha256"]:
+        raise ValueError("family/rescue provenance mismatch on body_evidence_sha256")
+    if provenance["raw_graph_sha256"] != verified["raw_graph_sha256"]:
+        raise ValueError("family/rescue provenance mismatch on raw_graph_sha256")
+
+    if rescue.get("ground_truth") != {"used_for": "not used"}:
+        raise ValueError("rescue artifact ground_truth policy is invalid")
+    if not isinstance(rescue.get("budget"), Mapping):
+        raise ValueError("rescue artifact budget must be an object")
+    if not isinstance(rescue.get("summary"), Mapping):
+        raise ValueError("rescue artifact summary must be an object")
+    if not isinstance(rescue.get("components"), list):
+        raise ValueError("rescue artifact components must be a list")
+
+    if candidate_sha is not None:
+        if not isinstance(candidate_artifact, Mapping):
+            raise ValueError("candidate artifact is required for rescue provenance")
+        candidate_provenance = candidate_artifact.get("provenance")
+        if not isinstance(candidate_provenance, Mapping):
+            raise ValueError("candidate artifact provenance is missing")
+        for key in _RESCUE_SHARED_PROVENANCE:
+            candidate_value = candidate_provenance.get(key)
+            if candidate_value is None:
+                raise ValueError(f"candidate provenance.{key} is missing")
+            if key.endswith("_sha256"):
+                _digest(candidate_value, f"candidate provenance.{key}")
+            if candidate_value != family_provenance[key]:
+                raise ValueError(f"strict/candidate {key} mismatch")
 
 
 def validate_rescue_partition(
@@ -209,68 +244,91 @@ def validate_rescue_partition(
     _digest(rescue_sha, "rescue_artifact_sha256")
     if not isinstance(rescue, Mapping):
         raise ValueError("rescue artifact must be an object")
-    if rescue.get("artifact") != "v1-family-rescue":
-        raise ValueError("expected a v1-family-rescue artifact")
-    if rescue.get("schema_version") not in (None, 1):
-        raise ValueError("unsupported v1 family rescue artifact")
-    for key in ("case", "build", "profile", "scope"):
-        if rescue.get(key) != families.get(key):
-            raise ValueError(f"family and rescue artifacts disagree on {key}")
-
     candidate_digest = (
         _digest(candidate_sha, "candidate_artifact_sha256")
         if candidate_sha is not None
         else None
     )
-    if candidate_digest is not None:
-        _validate_rescue_provenance(
-            rescue,
-            families,
-            candidate_artifact or {"provenance": {}},
-            strict_sha,
-            candidate_digest,
-            rescue_sha,
-        )
-    else:
-        # Keep the strict-family hash and body/provenance checks active even
-        # for direct callers that do not have the candidate file hash.
-        provenance = rescue.get("provenance")
-        if not isinstance(provenance, Mapping):
-            raise ValueError("rescue artifact provenance is missing")
-        if provenance.get("family_artifact_sha256") != strict_sha:
-            raise ValueError("rescue was built from another strict family artifact")
-        for key, value in provenance.items():
-            if key.endswith("_sha256"):
-                _digest(value, f"rescue provenance.{key}")
-        declared_rescue_sha = provenance.get("rescue_artifact_sha256")
-        if declared_rescue_sha is not None and declared_rescue_sha != rescue_sha:
-            raise ValueError("rescue artifact SHA-256 does not match its provenance")
-        family_provenance = families.get("provenance")
-        if isinstance(family_provenance, Mapping):
-            for key in ("stripped_sha256", "body_evidence_sha256"):
-                recorded = provenance.get(key)
-                expected = family_provenance.get(key)
-                if recorded is not None and expected is not None and _digest(
-                    recorded, f"rescue provenance.{key}"
-                ) != _digest(expected, f"strict provenance.{key}"):
-                    raise ValueError(f"family/rescue provenance mismatch on {key}")
+    _validate_rescue_provenance(
+        rescue,
+        families,
+        candidate_artifact,
+        strict_sha,
+        candidate_digest,
+    )
 
     strict_cores, _, _ = _strict_view(families)
-    declared_strict = _partition_mapping(
-        rescue.get("strict_partition"), where="rescue strict_partition"
-    )
-    if declared_strict != strict_cores:
+    declared_strict = rescue.get("strict_partition")
+    if not isinstance(declared_strict, list):
+        raise ValueError("rescue artifact strict_partition must be a list")
+    strict_ids: set[str] = set()
+    strict_members: set[str] = set()
+    strict_map: dict[str, tuple[str, ...]] = {}
+    for index, item in enumerate(declared_strict):
+        if not isinstance(item, Mapping) or set(item) != {"id", "members"}:
+            raise ValueError(
+                f"rescue artifact strict_partition[{index}] has invalid fields"
+            )
+        identifier = item.get("id")
+        members = item.get("members")
+        if (
+            not isinstance(identifier, str)
+            or not identifier
+            or identifier in strict_ids
+            or not isinstance(members, list)
+            or not members
+            or any(not isinstance(member, str) or not member for member in members)
+            or len(set(members)) != len(members)
+            or strict_members.intersection(members)
+        ):
+            raise ValueError(f"rescue artifact strict_partition[{index}] is invalid")
+        strict_ids.add(identifier)
+        strict_members.update(members)
+        strict_map[identifier] = tuple(sorted(members))
+    if strict_map != strict_cores:
         raise ValueError(
             "rescue strict_partition does not match strict accepted partition"
         )
 
-    final = _partition_mapping(
-        rescue.get("final_partition"), where="rescue final_partition"
+    final_records = rescue.get("final_partition")
+    if not isinstance(final_records, list):
+        raise ValueError("rescue artifact final_partition is invalid")
+    final: dict[str, tuple[str, ...]] = {}
+    final_members_flat: list[str] = []
+    final_ids: set[str] = set()
+    for index, item in enumerate(final_records):
+        if not isinstance(item, Mapping) or set(item) != {"id", "members", "origin"}:
+            raise ValueError(
+                f"rescue artifact final_partition[{index}] has invalid fields"
+            )
+        identifier = item.get("id")
+        members = item.get("members")
+        origin = item.get("origin")
+        if not isinstance(identifier, str) or not identifier or identifier in final_ids:
+            raise ValueError(f"rescue artifact final_partition[{index}].id is invalid")
+        if (
+            not isinstance(members, list)
+            or any(not isinstance(member, str) or not member for member in members)
+            or len(set(members)) != len(members)
+            or origin not in {"strict", "rescued"}
+        ):
+            raise ValueError(f"rescue artifact final_partition[{index}] is invalid")
+        final_ids.add(identifier)
+        final[identifier] = tuple(sorted(members))
+        final_members_flat.extend(members)
+    duplicates = sorted(
+        {
+            member
+            for member in final_members_flat
+            if final_members_flat.count(member) > 1
+        }
     )
+    if duplicates:
+        raise ValueError("rescue final_partition has duplicate accepted members")
     accepted_members = {
         member for members in strict_cores.values() for member in members
     }
-    final_members = {member for members in final.values() for member in members}
+    final_members = set(final_members_flat)
     if final_members != accepted_members:
         missing = sorted(accepted_members - final_members)
         added = sorted(final_members - accepted_members)
@@ -985,7 +1043,7 @@ def build_relaxed_artifacts(
         candidate_sha=candidate_sha,
         accounting=accounting,
         partition="strict-core",
-        rescue_sha=rescue_sha,
+        rescue_sha=None,
     )
     if f7_cores is None:
         return strict, None
@@ -1163,6 +1221,13 @@ def groups_for_scoring(
 ) -> list[list[str]]:
     """Validate the artifact and return strict plus one-member hypotheses."""
     if artifact.get("rule_version") in (STRICT_RULE_VERSION, F7_RULE_VERSION):
+        if (
+            artifact.get("rule_version") == F7_RULE_VERSION
+            and (rescue_artifact is None or rescue_artifact_sha256 is None)
+        ):
+            raise ValueError(
+                "F7 relaxed artifact scoring requires a rescue artifact and its SHA-256"
+            )
         cores, attachments = _validate_relaxed_artifact(
             artifact,
             family_artifact,
