@@ -35,7 +35,11 @@ python evaluate.py \
 ```
 
 `analyze` has no ground-truth, catalog or linkage argument, and `evaluate`
-never writes to what it scores. Both are checked.
+never writes to what it scores. When `--linkage-audit` is supplied, the file
+must be the `v1-gt-mangled-audit` artifact with an `addresses` overlay and a
+matching `provenance.ground_truth_sha256`; old pair-only files are rejected.
+Neutral pairs are derived only when both addresses are in the run's
+`grouping_role=member` universe. Both boundaries are checked.
 
 ## Stages and artifacts
 

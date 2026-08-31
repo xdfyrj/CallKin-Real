@@ -27,10 +27,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import v1_relaxed
 
@@ -374,15 +375,206 @@ def score_labels(
     return result
 
 
-def load_neutral_pairs(path: Path | None) -> dict[tuple[str, str], str]:
-    """Read a linkage-audit artifact's pair labels, if one was supplied."""
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdefABCDEF" for character in value)
+    )
+
+
+def _audit_provenance(
+    audit: Mapping[str, Any],
+    *,
+    run: Mapping[str, Any],
+    ground_truth: Mapping[str, Any],
+    ground_truth_sha256: str,
+) -> None:
+    """Check that a linkage audit belongs to this exact scoring input.
+
+    The linkage audit is generated from a non-stripped build and the ground
+    truth.  It is therefore not enough for its filename, case, or binary name
+    to match.  The raw ground-truth digest is mandatory, and optional binary
+    digests are checked whenever the producer recorded them.
+    """
+    if not _is_sha256(ground_truth_sha256):
+        raise EvaluationError("the supplied ground truth has an invalid SHA-256")
+    provenance = audit.get("provenance")
+    if not isinstance(provenance, Mapping):
+        raise EvaluationError("linkage audit has no provenance mapping")
+
+    audited_gt = provenance.get("ground_truth_sha256")
+    if not _is_sha256(audited_gt):
+        raise EvaluationError(
+            "linkage audit does not record a valid ground_truth_sha256"
+        )
+    if audited_gt != ground_truth_sha256:
+        raise EvaluationError(
+            "linkage audit ground_truth_sha256 mismatch: audit was built from "
+            f"{audited_gt}, supplied ground truth is {ground_truth_sha256}"
+        )
+
+    gt_provenance = ground_truth.get("provenance")
+    if not isinstance(gt_provenance, Mapping):
+        gt_provenance = {}
+    run_binary = (run.get("binary") or {}).get("sha256")
+    audit_stripped = provenance.get("stripped_sha256")
+    if audit_stripped is not None:
+        if not _is_sha256(audit_stripped):
+            raise EvaluationError("linkage audit has an invalid stripped_sha256")
+        if run_binary is not None and audit_stripped != run_binary:
+            raise EvaluationError(
+                "linkage audit stripped_sha256 does not match the analysed binary"
+            )
+        gt_stripped = gt_provenance.get("stripped_sha256")
+        if gt_stripped is not None and audit_stripped != gt_stripped:
+            raise EvaluationError(
+                "linkage audit stripped_sha256 does not match ground truth"
+            )
+
+    audit_non_stripped = provenance.get("non_stripped_sha256")
+    if audit_non_stripped is not None:
+        if not _is_sha256(audit_non_stripped):
+            raise EvaluationError(
+                "linkage audit has an invalid non_stripped_sha256"
+            )
+        gt_non_stripped = gt_provenance.get("non_stripped_sha256")
+        if gt_non_stripped is None:
+            raise EvaluationError(
+                "linkage audit records non_stripped_sha256 but ground truth does not"
+            )
+        if audit_non_stripped != gt_non_stripped:
+            raise EvaluationError(
+                "linkage audit non_stripped_sha256 does not match ground truth"
+            )
+
+    # These fields are optional in the hand-built run fixture, but if either
+    # side records one, an audit from another case/build/profile is invalid.
+    for field in ("case", "build", "profile"):
+        audit_value = audit.get(field)
+        if audit_value is None:
+            raise EvaluationError(f"linkage audit has no {field}")
+        gt_value = ground_truth.get(field)
+        if gt_value is not None and audit_value != gt_value:
+            raise EvaluationError(
+                f"linkage audit disagrees on {field}: "
+                f"{audit_value!r} vs {gt_value!r}"
+            )
+        run_value = run.get(field)
+        if run_value is not None and audit_value != run_value:
+            raise EvaluationError(
+                f"linkage audit disagrees on {field}: "
+                f"{audit_value!r} vs {run_value!r}"
+            )
+
+
+def _neutral_label(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+) -> str | None:
+    """Copy the frozen linkage-overlay pair semantics for neutral pairs.
+
+    Positive and negative labels are deliberately discarded here.  The
+    evaluator needs only the pairs that the binary-level linkage evidence
+    cannot fairly charge to a prediction.
+    """
+    left_ids = set(left["identities"])
+    right_ids = set(right["identities"])
+    if not left_ids or not right_ids:
+        return UNRESOLVED_NEUTRAL
+
+    left_origins = set(left["origins"])
+    right_origins = set(right["origins"])
+    if not left_origins or not right_origins:
+        return UNRESOLVED_NEUTRAL
+    if len(left_origins) > 1 or len(right_origins) > 1:
+        return AMBIGUOUS_NEUTRAL
+    if left_origins != right_origins:
+        return None
+    if left_ids & right_ids:
+        return DUPLICATE_NEUTRAL
+    return None
+
+
+def load_neutral_pairs(
+    path: Path | None,
+    *,
+    universe: set[str] | None = None,
+    run: Mapping[str, Any] | None = None,
+    ground_truth: Mapping[str, Any] | None = None,
+    ground_truth_sha256: str | None = None,
+) -> dict[tuple[str, str], str]:
+    """Derive neutral pair labels from the real address linkage overlay.
+
+    The old pair-list shortcut accepted labels without proving where they came
+    from.  A supplied audit must now be the frozen
+    ``v1-gt-mangled-audit`` artifact and must contain its ``addresses`` map.
+    Only address pairs whose *both* IDs are grouping members are considered;
+    addresses for abstained/context-only functions are ignored.
+    """
     if path is None:
         return {}
+    if universe is None or run is None or ground_truth is None or ground_truth_sha256 is None:
+        raise EvaluationError(
+            "linkage audit validation requires run, ground truth and grouping universe"
+        )
     data, _ = _read(path)
+    if data.get("artifact") != "v1-gt-mangled-audit":
+        raise EvaluationError(
+            "linkage audit has no addresses overlay: expected "
+            "v1-gt-mangled-audit"
+        )
+    if data.get("schema_version") != 1:
+        raise EvaluationError(
+            f"unsupported linkage audit schema: {data.get('schema_version')!r}"
+        )
+    _audit_provenance(
+        data,
+        run=run,
+        ground_truth=ground_truth,
+        ground_truth_sha256=ground_truth_sha256,
+    )
+
+    addresses = data.get("addresses")
+    if not isinstance(addresses, Mapping) or not addresses:
+        raise EvaluationError("linkage audit has no addresses overlay")
+    records: dict[str, Mapping[str, Any]] = {}
+    for function_id, record in addresses.items():
+        if not isinstance(function_id, str) or not isinstance(record, Mapping):
+            raise EvaluationError("linkage audit addresses overlay is malformed")
+        identities = record.get("identities")
+        origins = record.get("origins")
+        if not isinstance(identities, list) or not all(
+            isinstance(item, str) for item in identities
+        ):
+            raise EvaluationError(
+                f"linkage audit address {function_id!r} has invalid identities"
+            )
+        if not isinstance(origins, list) or not all(
+            isinstance(item, str) for item in origins
+        ):
+            raise EvaluationError(
+                f"linkage audit address {function_id!r} has invalid origins"
+            )
+        records[function_id] = {"identities": identities, "origins": origins}
+
+    # Neutral pairs are meaningful only on the same scored universe used by
+    # score_partition: discovered grouping members that the GT actually
+    # describes.  A linkage audit may contain more addresses than this run
+    # (or this run may contain more members than the GT); keeping those pairs
+    # would inflate neutral_pair_total and corrupt TN.
+    gt_member_ids = set(gt_members(ground_truth))
+    available = sorted(set(universe) & gt_member_ids & set(records))
+    if len(available) < 2:
+        raise EvaluationError(
+            "linkage audit has fewer than two addresses in the grouping-member universe"
+        )
+
     pairs: dict[tuple[str, str], str] = {}
-    for record in data.get("pairs", []):
-        left, right = sorted(record["pair"])
-        pairs[(left, right)] = record["label"]
+    for left_id, right_id in itertools.combinations(available, 2):
+        label = _neutral_label(records[left_id], records[right_id])
+        if label in NEUTRAL_LABELS:
+            pairs[(left_id, right_id)] = label
     return pairs
 
 
@@ -418,8 +610,18 @@ def evaluate(
     labels, labels_sha = optional(".labels.direct.json")
     propagation, propagation_sha = optional(".v1.labels.strict.json")
 
-    neutral = load_neutral_pairs(linkage_audit)
     universe, body, relation = stage("universe"), stage("body"), stage("relation")
+    grouping_universe = {
+        record["id"] for record in universe["functions"]
+        if record["grouping_role"] == "member"
+    }
+    neutral = load_neutral_pairs(
+        linkage_audit,
+        universe=grouping_universe,
+        run=run,
+        ground_truth=ground_truth,
+        ground_truth_sha256=gt_sha256,
+    )
 
     return {
         "schema_version": 1,

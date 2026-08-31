@@ -272,7 +272,7 @@ def test_an_artifact_changed_since_the_run_is_refused():
             raise AssertionError("a changed artifact was scored")
 
 
-def test_a_neutral_pair_leaves_the_denominator():
+def test_legacy_pair_only_audit_is_refused():
     with tempfile.TemporaryDirectory(prefix="callkin-eval-") as directory:
         room = Path(directory)
         run_path, gt_path = _fixture(room)
@@ -281,6 +281,73 @@ def test_a_neutral_pair_leaves_the_denominator():
             {"pair": ["FUN_00101000", "FUN_00102000"],
              "label": evaluator.DUPLICATE_NEUTRAL},
         ]})
+        try:
+            evaluator.evaluate(run_path, gt_path, linkage_audit=audit)
+        except evaluator.EvaluationError as exc:
+            assert "addresses overlay" in str(exc)
+        else:
+            raise AssertionError("legacy pair-only audit was accepted")
+
+
+def _addresses_audit(
+    room: Path,
+    gt_path: Path,
+    *,
+    binary: str = "a" * 64,
+    first_origins: list[str] | None = None,
+    second_origins: list[str] | None = None,
+    first_identity: str = "M1",
+    second_identity: str = "M2",
+) -> Path:
+    """Write the real gt-mangled-audit address-overlay shape."""
+    gt_sha256 = hashlib.sha256(gt_path.read_bytes()).hexdigest()
+    values = {
+        "FUN_00101000": {
+            "identities": [first_identity],
+            "origins": first_origins or ["test::f"],
+            "raw_symbols": ["test::f::<A>"],
+        },
+        "FUN_00102000": {
+            "identities": [second_identity],
+            "origins": second_origins or ["test::f"],
+            "raw_symbols": ["test::f::<B>"],
+        },
+        # This member is discovered but not in the grouping-member universe.
+        "FUN_00103000": {
+            "identities": ["M3"],
+            "origins": ["test::other"],
+            "raw_symbols": ["test::other"],
+        },
+        # This address is in the audit but is not described by GT.  It must
+        # never affect the scored denominator even if a run later discovers
+        # it as a grouping member.
+        "FUN_00999999": {
+            "identities": ["M9"],
+            "origins": ["test::f"],
+            "raw_symbols": ["test::f::<C>"],
+        },
+    }
+    audit = room / "linkage.json"
+    callkin_real.write_json(audit, {
+        "schema_version": 1,
+        "artifact": "v1-gt-mangled-audit",
+        "case": "test",
+        "build": "O3S",
+        "profile": "plain",
+        "provenance": {
+            "ground_truth_sha256": gt_sha256,
+            "stripped_sha256": binary,
+        },
+        "addresses": values,
+    })
+    return audit
+
+
+def test_addresses_overlay_derives_duplicate_neutral_only_for_grouping_members():
+    with tempfile.TemporaryDirectory(prefix="callkin-eval-") as directory:
+        room = Path(directory)
+        run_path, gt_path = _fixture(room)
+        audit = _addresses_audit(room, gt_path, first_identity="M1", second_identity="M1")
         report = evaluator.evaluate(run_path, gt_path, linkage_audit=audit)
 
     v0 = report["grouping"]["methods"]["v0_relation_only"]
@@ -289,6 +356,104 @@ def test_a_neutral_pair_leaves_the_denominator():
     assert v0["false_negative"] == 0
     assert v0["neutral_pair_total"] == 1
     assert v0["neutral_pair_counts"][evaluator.DUPLICATE_NEUTRAL] == 1
+
+
+def test_addresses_overlay_derives_ambiguous_neutral():
+    with tempfile.TemporaryDirectory(prefix="callkin-eval-") as directory:
+        room = Path(directory)
+        run_path, gt_path = _fixture(room)
+        audit = _addresses_audit(
+            room,
+            gt_path,
+            first_origins=["test::f", "test::other"],
+        )
+        report = evaluator.evaluate(run_path, gt_path, linkage_audit=audit)
+
+    v0 = report["grouping"]["methods"]["v0_relation_only"]
+    assert v0["neutral_pair_total"] == 1
+    assert v0["neutral_pair_counts"][evaluator.AMBIGUOUS_NEUTRAL] == 1
+
+
+def test_unknown_grouping_member_does_not_change_scored_neutral_totals():
+    with tempfile.TemporaryDirectory(prefix="callkin-eval-") as directory:
+        room = Path(directory)
+        run_path, gt_path = _fixture(room)
+        audit = _addresses_audit(room, gt_path, first_identity="M1", second_identity="M1")
+        baseline = evaluator.evaluate(run_path, gt_path, linkage_audit=audit)
+
+        run = json.loads(run_path.read_text(encoding="utf-8"))
+        universe_path = room / run["artifacts"]["universe"]["path"]
+        universe_artifact = json.loads(universe_path.read_text(encoding="utf-8"))
+        universe_artifact["payload"]["functions"].append({
+            "id": "FUN_00999999",
+            "analysis_status": "complete",
+            "grouping_role": "member",
+            "quality": {"complete_decode": True},
+        })
+        universe_sha = callkin_real.write_json(universe_path, universe_artifact)
+        run["artifacts"]["universe"]["sha256"] = universe_sha
+        run["stage_sha256"]["universe"] = universe_sha
+        callkin_real.write_json(run_path, run)
+
+        changed = evaluator.evaluate(run_path, gt_path, linkage_audit=audit)
+
+    baseline_v0 = baseline["grouping"]["methods"]["v0_relation_only"]
+    changed_v0 = changed["grouping"]["methods"]["v0_relation_only"]
+    assert changed_v0 == baseline_v0
+
+
+def test_linkage_audit_ground_truth_digest_mismatch_is_refused():
+    with tempfile.TemporaryDirectory(prefix="callkin-eval-") as directory:
+        room = Path(directory)
+        run_path, gt_path = _fixture(room)
+        audit = _addresses_audit(room, gt_path)
+        data = json.loads(audit.read_text(encoding="utf-8"))
+        data["provenance"]["ground_truth_sha256"] = "b" * 64
+        callkin_real.write_json(audit, data)
+        try:
+            evaluator.evaluate(run_path, gt_path, linkage_audit=audit)
+        except evaluator.EvaluationError as exc:
+            assert "ground_truth_sha256" in str(exc)
+        else:
+            raise AssertionError("tampered linkage audit was accepted")
+
+
+def test_linkage_audit_wrong_binary_is_refused():
+    with tempfile.TemporaryDirectory(prefix="callkin-eval-") as directory:
+        room = Path(directory)
+        run_path, gt_path = _fixture(room)
+        audit = _addresses_audit(room, gt_path, binary="b" * 64)
+        try:
+            evaluator.evaluate(run_path, gt_path, linkage_audit=audit)
+        except evaluator.EvaluationError as exc:
+            assert "stripped_sha256" in str(exc)
+        else:
+            raise AssertionError("wrong-binary linkage audit was accepted")
+
+
+def test_linkage_audit_without_usable_addresses_is_refused():
+    with tempfile.TemporaryDirectory(prefix="callkin-eval-") as directory:
+        room = Path(directory)
+        run_path, gt_path = _fixture(room)
+        audit = room / "linkage.json"
+        callkin_real.write_json(audit, {
+            "schema_version": 1,
+            "artifact": "v1-gt-mangled-audit",
+            "case": "test",
+            "build": "O3S",
+            "profile": "plain",
+            "provenance": {
+                "ground_truth_sha256": hashlib.sha256(gt_path.read_bytes()).hexdigest(),
+                "stripped_sha256": "a" * 64,
+            },
+            "pairs": [],
+        })
+        try:
+            evaluator.evaluate(run_path, gt_path, linkage_audit=audit)
+        except evaluator.EvaluationError as exc:
+            assert "addresses overlay" in str(exc)
+        else:
+            raise AssertionError("empty/no-op linkage audit was accepted")
 
 
 def main() -> int:
@@ -300,7 +465,12 @@ def main() -> int:
     test_discovery_is_scored_apart_from_grouping()
     test_ground_truth_for_another_binary_is_refused()
     test_an_artifact_changed_since_the_run_is_refused()
-    test_a_neutral_pair_leaves_the_denominator()
+    test_legacy_pair_only_audit_is_refused()
+    test_addresses_overlay_derives_duplicate_neutral_only_for_grouping_members()
+    test_addresses_overlay_derives_ambiguous_neutral()
+    test_linkage_audit_ground_truth_digest_mismatch_is_refused()
+    test_linkage_audit_wrong_binary_is_refused()
+    test_linkage_audit_without_usable_addresses_is_refused()
     print("CallKin-Real oracle firewall: PASS")
     print(note)
     return 0
