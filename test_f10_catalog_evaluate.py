@@ -487,6 +487,66 @@ def test_mapping_inputs_bind_canonical_content_and_reject_tampering():
         raise AssertionError("tampered mapping was accepted with its old digest")
 
 
+def test_explicit_empty_digest_aliases_are_rejected():
+    labels, prediction, catalog = _labels(), _prediction(), _catalog()
+    with tempfile.TemporaryDirectory(prefix="f10-score-") as directory:
+        room = Path(directory)
+        paths = {
+            "catalog": room / "catalog.json",
+            "labels": room / "labels.json",
+            "prediction": room / "prediction.json",
+        }
+        for name, value in (("catalog", catalog), ("labels", labels), ("prediction", prediction)):
+            _write_json(paths[name], value)
+        for alias in (
+            "catalog_sha256",
+            "catalog_raw_sha256",
+            "all_rust_catalog_sha256",
+            "labels_sha256",
+            "labels_raw_sha256",
+            "oxidizer_labels_sha256",
+            "prediction_sha256",
+            "prediction_raw_sha256",
+            "family_label_propagation_sha256",
+        ):
+            try:
+                scorer.score_catalog_propagation(
+                    paths["catalog"],
+                    paths["labels"],
+                    paths["prediction"],
+                    **{alias: ""},
+                )
+            except ValueError as exc:
+                assert "SHA-256 digest" in str(exc)
+            else:
+                raise AssertionError(f"empty {alias} was accepted")
+
+
+def test_conflicting_digest_aliases_are_rejected():
+    catalog, labels = _catalog(), _labels()
+    labels_sha = _canonical_sha(labels)
+    prediction = _prediction(labels=labels, labels_sha256=labels_sha)
+    hashes = {
+        "catalog_sha256": _canonical_sha(catalog),
+        "labels_sha256": labels_sha,
+        "prediction_sha256": _canonical_sha(prediction),
+    }
+    conflict_pairs = (
+        ("catalog_sha256", "catalog_raw_sha256"),
+        ("labels_sha256", "labels_raw_sha256"),
+        ("prediction_sha256", "prediction_raw_sha256"),
+    )
+    for primary, alias in conflict_pairs:
+        kwargs = dict(hashes)
+        kwargs[alias] = "0" * 64
+        try:
+            scorer.score_catalog_propagation(catalog, labels, prediction, **kwargs)
+        except ValueError as exc:
+            assert "conflicting" in str(exc)
+        else:
+            raise AssertionError(f"conflicting {primary}/{alias} aliases were accepted")
+
+
 def _main() -> int:
     test_strict_scores_exact_origin_owner_and_all_direct_seeds()
     test_rescue_is_scored_and_case_build_names_are_not_identity()
@@ -503,6 +563,8 @@ def _main() -> int:
     test_direct_member_spelling_is_bound_to_label_artifact()
     test_decoded_direct_and_propagated_address_overlap_fails_closed()
     test_mapping_inputs_bind_canonical_content_and_reject_tampering()
+    test_explicit_empty_digest_aliases_are_rejected()
+    test_conflicting_digest_aliases_are_rejected()
     print("CallKin-Real F10 catalog scoring: PASS")
     return 0
 

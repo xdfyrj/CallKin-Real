@@ -44,6 +44,18 @@ def _digest(value: object, *, where: str) -> str:
     return value
 
 
+def _resolve_digest_aliases(
+    *values: str | None, where: str
+) -> str | None:
+    supplied = [value for value in values if value is not None]
+    if not supplied:
+        return None
+    selected = supplied[0]
+    if any(value != selected for value in supplied[1:]):
+        raise ValueError(f"{where} has conflicting SHA-256 digest aliases")
+    return selected
+
+
 def _json_bytes(value: Mapping[str, Any]) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -322,9 +334,24 @@ def score_catalog_propagation(
     family_label_propagation_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Return exact origin+owner metrics without changing any input artifact."""
-    catalog_sha256 = catalog_sha256 or catalog_raw_sha256 or all_rust_catalog_sha256
-    labels_sha256 = labels_sha256 or labels_raw_sha256 or oxidizer_labels_sha256
-    prediction_sha256 = prediction_sha256 or prediction_raw_sha256 or family_label_propagation_sha256
+    catalog_sha256 = _resolve_digest_aliases(
+        catalog_sha256,
+        catalog_raw_sha256,
+        all_rust_catalog_sha256,
+        where="catalog",
+    )
+    labels_sha256 = _resolve_digest_aliases(
+        labels_sha256,
+        labels_raw_sha256,
+        oxidizer_labels_sha256,
+        where="labels",
+    )
+    prediction_sha256 = _resolve_digest_aliases(
+        prediction_sha256,
+        prediction_raw_sha256,
+        family_label_propagation_sha256,
+        where="prediction",
+    )
     catalog, catalog_hash = _read_source(
         catalog, where="catalog", declared_sha256=catalog_sha256
     )
