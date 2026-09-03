@@ -174,16 +174,60 @@ def validate_label_artifact(data: object) -> dict[str, Any]:
         raise LabelArtifactError(f"not a {LABEL_ARTIFACT} artifact")
     if data["policy"]["seed_policy"] != "direct-flirt-only":
         raise LabelArtifactError("label artifact seed policy is not direct-flirt-only")
+    seen_evidence_addresses: set[tuple[str, int]] = set()
     for key, evidence in (
         ("matches", DIRECT_FLIRT),
         ("propagated_wrappers", PROPAGATED_WRAPPER),
         ("cleanup_heuristics", CLEANUP_HEURISTIC),
     ):
+        if not isinstance(data[key], list):
+            raise LabelArtifactError(f"{key} must be a list")
         for record in data[key]:
+            if not isinstance(record, dict):
+                raise LabelArtifactError(f"{key} records must be objects")
             if record["evidence"] != evidence:
                 raise LabelArtifactError(f"{key} holds a {record['evidence']} record")
             if record["seedable"] is not SEEDABLE[evidence]:
                 raise LabelArtifactError(f"{key} record has the wrong seedable flag")
+            address = _address(record["address"], where=f"{key}.address")
+            marker = (evidence, address)
+            if marker in seen_evidence_addresses:
+                raise LabelArtifactError(
+                    f"duplicate label evidence at 0x{address:x}: {evidence}"
+                )
+            seen_evidence_addresses.add(marker)
+
+    unmatched = data["unmatched_addresses"]
+    if not isinstance(unmatched, list):
+        raise LabelArtifactError("unmatched_addresses must be a list")
+    expected_unmatched_fields = {
+        "member", "address", "mapped_address", "evidence", "seedable",
+        "canonical_origin", "owner", "reason",
+    }
+    for index, record in enumerate(unmatched):
+        where = f"unmatched_addresses[{index}]"
+        if not isinstance(record, dict) or set(record) != expected_unmatched_fields:
+            raise LabelArtifactError(f"{where} has invalid fields")
+        evidence = record["evidence"]
+        if evidence not in SEEDABLE:
+            raise LabelArtifactError(f"{where}.evidence is {evidence!r}")
+        if record["seedable"] is not SEEDABLE[evidence]:
+            raise LabelArtifactError(f"{where} has the wrong seedable flag")
+        if record["reason"] != "no_discovered_function":
+            raise LabelArtifactError(f"{where}.reason is invalid")
+        if any(
+            not isinstance(record[key], str) or not record[key]
+            for key in ("member", "address", "mapped_address", "canonical_origin", "owner")
+        ):
+            raise LabelArtifactError(f"{where} has invalid values")
+        address = _address(record["address"], where=f"{where}.address")
+        _address(record["mapped_address"], where=f"{where}.mapped_address")
+        marker = (evidence, address)
+        if marker in seen_evidence_addresses:
+            raise LabelArtifactError(
+                f"duplicate label evidence at 0x{address:x}: {evidence}"
+            )
+        seen_evidence_addresses.add(marker)
     return data
 
 

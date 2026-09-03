@@ -331,6 +331,31 @@ def test_unmatched_direct_stays_in_baseline_and_preserves_mapped_address():
     ]
 
 
+def test_unmatched_inference_cannot_be_relabelled_as_direct():
+    for evidence in (PROPAGATED_WRAPPER, CLEANUP_HEURISTIC):
+        labels = _labels((B, "core::ptr::drop_in_place<T>", evidence), discovered=(A, C, D))
+        labels["unmatched_addresses"][0]["evidence"] = DIRECT_FLIRT
+        try:
+            direct_seeds(labels)
+        except LabelArtifactError as exc:
+            assert "unmatched_addresses" in str(exc)
+        else:
+            raise AssertionError(f"{evidence} was accepted as unmatched direct evidence")
+
+
+def test_malformed_unmatched_record_is_rejected():
+    labels = _labels(
+        (D, "core::ptr::drop_in_place<T>", DIRECT_FLIRT), discovered=(A, B, C)
+    )
+    del labels["unmatched_addresses"][0]["reason"]
+    try:
+        direct_seeds(labels)
+    except LabelArtifactError as exc:
+        assert "unmatched_addresses" in str(exc)
+    else:
+        raise AssertionError("malformed unmatched record was accepted")
+
+
 def test_the_normalizer_matches_the_frozen_one() -> str:
     """Differential check against `gt_extractor`, which must not be imported.
 
@@ -428,6 +453,8 @@ def main() -> int:
     test_a_hand_edited_seedable_flag_is_refused()
     test_a_match_with_no_discovered_function_is_kept_as_unmatched()
     test_unmatched_direct_stays_in_baseline_and_preserves_mapped_address()
+    test_unmatched_inference_cannot_be_relabelled_as_direct()
+    test_malformed_unmatched_record_is_rejected()
     note = test_the_normalizer_matches_the_frozen_one()
     test_the_analysis_path_does_not_import_ground_truth()
     test_propagation_does_not_feed_back_into_the_earlier_stages()
