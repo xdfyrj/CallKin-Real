@@ -69,7 +69,51 @@ Run:
 
 Commit message: `feat: bound V1 work by whole candidate components`
 
-### Task 2: Wire the cost-bounded mode into the analysis pipeline
+### Task 2: Restore the frozen opaque-jump policy at the adapter
+
+**Files:**
+- Modify: `real_v1_adapter.py`
+- Modify: `test_real_v1_adapter.py`
+
+**Interfaces:**
+- Consumes: CallKin-Real body quality key `opaque_indirect_jump_count`.
+- Produces: in-memory `FunctionBody.quality["opaque_indirect_jumps"]` consumed by frozen F4/F6.
+
+- [ ] **Step 1: Write the failing bridge test**
+
+Build a literal CallKin-Real body with `opaque_indirect_jump_count: 1`, load it
+through `load_real_v1_input`, and assert the returned body exposes
+`opaque_indirect_jumps: 1`. Also assert a frozen `PairEvidenceCache` refuses to
+charge or compare a pair containing that body when
+`abstain_on_opaque_indirect=true`.
+
+- [ ] **Step 2: Run and verify RED**
+
+Run: `/usr/bin/python3.12 test_real_v1_adapter.py`
+
+Expected: the plural frozen-V1 quality key is absent or the pair is charged.
+
+- [ ] **Step 3: Add the minimal in-memory alias**
+
+When the adapter loads each body, copy the integer value from
+`opaque_indirect_jump_count` to `opaque_indirect_jumps`. Reject a body that
+already has a conflicting plural value. Do not rewrite stage files.
+
+- [ ] **Step 4: Verify GREEN and golden stability**
+
+Run:
+
+```text
+/usr/bin/python3.12 test_real_v1_adapter.py
+/usr/bin/python3.12 test_f4_golden.py
+/usr/bin/python3.12 test_v1_grouping.py
+```
+
+- [ ] **Step 5: Commit**
+
+Commit message: `fix: preserve opaque abstention across the V1 adapter`
+
+### Task 3: Wire the cost-bounded mode into the analysis pipeline
 
 **Files:**
 - Modify: `analyze.py`
@@ -112,7 +156,7 @@ Run:
 
 Commit message: `feat: run component-budgeted V1 before FLIRT propagation`
 
-### Task 3: Freeze zoxide predictions, score them, and record the result
+### Task 4: Freeze zoxide predictions, score them, and record the result
 
 **Files:**
 - Create outside Git results: a new zoxide component-budgeted queue, strict family, F7 rescue, direct-label, and strict/rescue propagation artifacts.
@@ -150,4 +194,3 @@ plain Korean.
 
 Run all focused tests, `git diff --check`, verify the code worktree is clean,
 and verify that every result hash quoted in the note matches the file on disk.
-

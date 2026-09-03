@@ -13,6 +13,10 @@ of 10,000 detailed comparisons and 500,000,000 alignment cells.
   queues, and actual Oxidizer direct-FLIRT output for the same stripped binary.
 - Do not change F5 scores, F6 thresholds, F7 rules, the opaque-jump policy, or
   the two formal budget limits.
+- At the CallKin-Real/frozen-V1 adapter boundary, expose
+  `opaque_indirect_jump_count` as the frozen comparator's
+  `opaque_indirect_jumps`. This restores the already-declared opaque abstention
+  rule without rewriting either stored body artifacts or frozen V1 code.
 - FLIRT labels and scoring oracle data must not affect component selection,
   pair comparison, clustering, or rescue.
 - Direct FLIRT matches remain ordinary V1 members when their bodies are
@@ -65,4 +69,3 @@ Exact correctness requires both origin and owner to match. Success requires:
 
 If the gate fails, report the measured failure without changing the queue
 policy. A positive result supports only a zoxide O3S case-specific claim.
-
