@@ -42,6 +42,7 @@ import callkin_real
 LABEL_BLIND_ARTIFACTS = (
     "discovery", "body", "universe", "relation",
     "candidates.multi", "candidates.consensus3", "candidates.consensus2",
+    "candidates.consensus3-budgeted",
     "families.strict", "families.rescue",
 )
 
@@ -65,6 +66,7 @@ def analyze(
     case: str | None = None,
     no_flirt: bool = False,
     top_k: int = 16,
+    component_budgeted_v1: bool = False,
 ) -> dict[str, Any]:
     """Run every stage, recording what each one did or could not do."""
     # Imported here rather than at module scope so a stage that fails to import
@@ -124,9 +126,32 @@ def analyze(
 
     config = PairPolicyConfig.from_file(v1_grouping.FORMAL_CONFIG)
     queue = queues[v1_grouping.STRICT_QUEUE]
+    queue_sha256 = written[v1_grouping.STRICT_QUEUE]["sha256"]
+    if component_budgeted_v1:
+        import v1_component_budget
+
+        queue, budget_report = v1_component_budget.build_budgeted_candidate_artifact(
+            queue, source, config, queue_sha256
+        )
+        budgeted_path = (
+            output_dir
+            / f"{stem}.v1.consensus3-budgeted.k{top_k}.candidates.json"
+        )
+        budgeted_sha256 = v1_grouping.write_json(budgeted_path, queue)
+        artifacts["candidates.consensus3-budgeted"] = {
+            "path": budgeted_path.name,
+            "sha256": budgeted_sha256,
+        }
+        stages.append(_stage(
+            "f5.component-budget", COMPLETED,
+            artifact="candidates.consensus3-budgeted",
+            cost=budget_report,
+            **budget_report,
+        ))
+        queue_sha256 = budgeted_sha256
     status, families, accounting = v1_grouping.build_strict_families(
         queue, source, config=config,
-        candidate_sha256=written[v1_grouping.STRICT_QUEUE]["sha256"],
+        candidate_sha256=queue_sha256,
     )
     families_path = output_dir / f"{stem}.v1.families.strict.json"
     if families is None:
@@ -198,6 +223,9 @@ def analyze(
             "no strict partition" if families is None else "no direct labels"
         )))
 
+    command = {"no_flirt": no_flirt, "top_k": top_k}
+    if component_budgeted_v1:
+        command["component_budgeted_v1"] = True
     manifest = {
         "schema_version": 1,
         "artifact": "callkin-real-analysis-manifest",
@@ -205,7 +233,7 @@ def analyze(
         "binary": {"path": str(binary), "sha256": run["binary"]["sha256"],
                    "format": run["binary"]["format"]},
         "toolchain": run["toolchain"],
-        "command": {"no_flirt": no_flirt, "top_k": top_k},
+        "command": command,
         "artifacts": artifacts,
         "stages": stages,
         "label_blind_sha256": {
@@ -227,6 +255,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-flirt", action="store_true")
     parser.add_argument("--top-k", type=int, default=16)
     parser.add_argument(
+        "--component-budgeted-v1",
+        action="store_true",
+        help="derive a whole-component F5 queue within the frozen F6 budget",
+    )
+    parser.add_argument(
         "--verify-label-blind",
         action="store_true",
         help="run twice, with and without FLIRT, and compare every "
@@ -243,12 +276,14 @@ def main(argv: list[str] | None = None) -> int:
         manifest = analyze(
             binary, output_dir, case=args.case,
             no_flirt=args.no_flirt, top_k=args.top_k,
+            component_budgeted_v1=args.component_budgeted_v1,
         )
         comparison = None
         if args.verify_label_blind:
             other = analyze(
                 binary, output_dir.parent / f"{output_dir.name}-no-flirt",
                 case=args.case, no_flirt=not args.no_flirt, top_k=args.top_k,
+                component_budgeted_v1=args.component_budgeted_v1,
             )
             mine, theirs = manifest["label_blind_sha256"], other["label_blind_sha256"]
             shared = sorted(set(mine) & set(theirs))
