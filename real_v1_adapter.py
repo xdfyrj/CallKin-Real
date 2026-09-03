@@ -29,11 +29,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from body_comparison import comparable_bodies, load_bodies
+from body_comparison import load_bodies
 from body_similarity import FunctionBody
 
 STAGE_INPUTS = {
@@ -86,6 +86,20 @@ def _payload(artifact: dict[str, Any], stage: str) -> dict[str, Any]:
             f"{artifact.get('artifact')!r}"
         )
     return artifact["payload"]
+
+
+def _with_opaque_alias(body: FunctionBody) -> FunctionBody:
+    quality = dict(body.quality)
+    singular = quality.get("opaque_indirect_jump_count", 0)
+    plural = quality.get("opaque_indirect_jumps")
+    if plural is not None and plural != singular:
+        raise ArtifactChainError(
+            f"{body.id} has conflicting opaque indirect jump counts: "
+            f"opaque_indirect_jump_count={singular!r}, "
+            f"opaque_indirect_jumps={plural!r}"
+        )
+    quality["opaque_indirect_jumps"] = singular
+    return replace(body, quality=quality)
 
 
 def load_stage_artifacts(
@@ -224,7 +238,10 @@ def load_real_v1_input(
         raise ArtifactChainError("the universe has no members to group")
 
     body_payload = _payload(artifacts["body"], "body")
-    all_bodies = load_bodies(body_payload)
+    all_bodies = {
+        function_id: _with_opaque_alias(body)
+        for function_id, body in load_bodies(body_payload).items()
+    }
     member_set = set(members)
     missing = member_set - set(all_bodies)
     if missing:
@@ -234,8 +251,8 @@ def load_real_v1_input(
         )
     bodies = {
         function_id: body
-        for function_id, body in comparable_bodies(body_payload).items()
-        if function_id in member_set
+        for function_id, body in all_bodies.items()
+        if function_id in member_set and body.complete
     }
 
     relation = relation_context(_payload(artifacts["relation"], "relation"))
