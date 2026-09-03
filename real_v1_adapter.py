@@ -91,8 +91,20 @@ def _payload(artifact: dict[str, Any], stage: str) -> dict[str, Any]:
 def _with_opaque_alias(body: FunctionBody) -> FunctionBody:
     quality = dict(body.quality)
     singular = quality.get("opaque_indirect_jump_count", 0)
+    plural_present = "opaque_indirect_jumps" in quality
     plural = quality.get("opaque_indirect_jumps")
-    if plural is not None and plural != singular:
+    for field, value in (
+        ("opaque_indirect_jump_count", singular),
+        ("opaque_indirect_jumps", plural),
+    ):
+        if field == "opaque_indirect_jumps" and not plural_present:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ArtifactChainError(
+                f"{body.id} has invalid {field}: expected a non-negative "
+                f"integer, got {value!r}"
+            )
+    if plural_present and plural != singular:
         raise ArtifactChainError(
             f"{body.id} has conflicting opaque indirect jump counts: "
             f"opaque_indirect_jump_count={singular!r}, "
