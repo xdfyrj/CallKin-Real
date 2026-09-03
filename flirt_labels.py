@@ -110,10 +110,14 @@ def build_label_artifact(
             )
         seen[(evidence, address)] = name
 
+        mapped_address = _address(
+            item.get("mapped_address", address),
+            where=f"{where}.mapped_address",
+        )
         record = {
             "member": callkin_real.function_id(address),
             "address": callkin_real.hex_address(address),
-            "mapped_address": callkin_real.hex_address(address),
+            "mapped_address": callkin_real.hex_address(mapped_address),
             "evidence": evidence,
             "seedable": SEEDABLE[evidence],
             **normalize_name(name),
@@ -184,13 +188,22 @@ def validate_label_artifact(data: object) -> dict[str, Any]:
 
 
 def direct_seeds(artifact: dict[str, Any]) -> list[dict[str, Any]]:
-    """The seeds F10 may use: direct-flirt matches, joined to the universe.
+    """The seeds F10 may use: every direct-flirt observation.
 
-    Nothing from `propagated_wrappers`, `cleanup_heuristics` or
-    `unmatched_addresses` reaches this list, and the artifact is revalidated
-    first so a hand-edited file cannot smuggle one in.
+    Joined matches and direct results that did not join the discovery universe
+    are both direct evidence. Wrapper and cleanup inferences remain excluded,
+    and the artifact is revalidated first so a hand-edited file cannot smuggle
+    one in.
     """
     validate_label_artifact(artifact)
+    records = [
+        *artifact["matches"],
+        *(
+            record
+            for record in artifact["unmatched_addresses"]
+            if record.get("evidence") == DIRECT_FLIRT
+        ),
+    ]
     return [
         {
             "address": record["address"],
@@ -198,7 +211,7 @@ def direct_seeds(artifact: dict[str, Any]) -> list[dict[str, Any]]:
             "canonical_origin": record["canonical_origin"],
             "owner": record["owner"],
         }
-        for record in artifact["matches"]
+        for record in records
     ]
 
 
