@@ -236,8 +236,8 @@ def direct_seeds(artifact: dict[str, Any]) -> list[dict[str, Any]]:
 
     Joined matches and direct results that did not join the discovery universe
     are both direct evidence. Wrapper and cleanup inferences remain excluded,
-    and the artifact is revalidated first so a hand-edited file cannot smuggle
-    one in.
+    and the artifact is revalidated first so a schema-inconsistent edit cannot
+    smuggle one in. Raw-file hashes bind valid artifacts at the consumer edge.
     """
     validate_label_artifact(artifact)
     records = [
