@@ -24,7 +24,9 @@ of 10,000 detailed comparisons and 500,000,000 alignment cells.
 - Every actual `direct-flirt` result remains in the direct baseline, including
   an address outside CallKin-Real's discovered/grouping universe. Such a label
   is reported as outside the universe and cannot propagate; it is not silently
-  dropped. Oxidizer wrapper and cleanup inferences remain non-seed evidence.
+  dropped. Join and member IDs use Oxidizer's `address`; a supplied
+  `mapped_address` is preserved only as source evidence. Oxidizer wrapper and
+  cleanup inferences remain non-seed evidence.
 - F10 is applied only after F6 and F7. One seed may label a family; multiple
   seeds must agree on both `canonical_origin` and `owner`. A conflict labels
   nobody, and a direct label is never overwritten.

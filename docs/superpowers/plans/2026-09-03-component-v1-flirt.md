@@ -130,7 +130,9 @@ Commit message: `fix: preserve opaque abstention across the V1 adapter`
 Create a label artifact with one joined direct match, one unmatched direct
 match, one unmatched wrapper, and one unmatched cleanup record. Require F10 to
 retain both direct matches, mark the unmatched direct member `in_universe:
-false`, and propagate from neither unmatched nor inferred evidence.
+false`, and propagate from neither unmatched nor inferred evidence. Give the
+records distinct `address` and `mapped_address` values and require the latter
+to be preserved without using it for the join or member ID.
 
 - [ ] **Step 2: Run and verify RED**
 
@@ -140,9 +142,11 @@ Expected: the unmatched direct record is absent from `direct_labels`.
 
 - [ ] **Step 3: Make direct baseline extraction complete**
 
-Have `direct_seeds()` return `matches` plus only the `direct-flirt` records in
-`unmatched_addresses`. Keep validation, deterministic order, duplicate-member
-rejection, and the non-seed treatment of wrapper/cleanup evidence.
+Have `build_label_artifact()` preserve a supplied `mapped_address` while still
+joining on `address`. Have `direct_seeds()` return `matches` plus only the
+`direct-flirt` records in `unmatched_addresses`. Keep validation, deterministic
+order, duplicate-member rejection, and the non-seed treatment of
+wrapper/cleanup evidence.
 
 - [ ] **Step 4: Verify GREEN**
 
