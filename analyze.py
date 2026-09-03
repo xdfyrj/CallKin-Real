@@ -142,11 +142,15 @@ def analyze(
             "path": budgeted_path.name,
             "sha256": budgeted_sha256,
         }
+        budget_summary = {
+            key: value
+            for key, value in budget_report.items()
+            if not isinstance(value, (dict, list, tuple, set))
+        }
         stages.append(_stage(
             "f5.component-budget", COMPLETED,
             artifact="candidates.consensus3-budgeted",
-            cost=budget_report,
-            **budget_report,
+            budget=budget_summary,
         ))
         queue_sha256 = budgeted_sha256
     status, families, accounting = v1_grouping.build_strict_families(
@@ -288,16 +292,21 @@ def main(argv: list[str] | None = None) -> int:
             mine, theirs = manifest["label_blind_sha256"], other["label_blind_sha256"]
             shared = sorted(set(mine) & set(theirs))
             differing = [name for name in shared if mine[name] != theirs[name]]
+            only_in_first = sorted(set(mine) - set(theirs))
+            only_in_second = sorted(set(theirs) - set(mine))
             comparison = {
                 "compared": shared,
-                "identical": not differing,
+                "identical": not (differing or only_in_first or only_in_second),
                 "differing": differing,
-                "only_in_first": sorted(set(mine) - set(theirs)),
-                "only_in_second": sorted(set(theirs) - set(mine)),
+                "only_in_first": only_in_first,
+                "only_in_second": only_in_second,
             }
-            if differing:
+            if not comparison["identical"]:
                 raise RuntimeError(
-                    f"the label stage moved {differing}, which it may not"
+                    "label-blind artifacts differ: "
+                    f"differing={comparison['differing']}, "
+                    f"only_in_first={comparison['only_in_first']}, "
+                    f"only_in_second={comparison['only_in_second']}"
                 )
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)

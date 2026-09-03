@@ -89,10 +89,21 @@ def _fake_pipeline_patches(room: Path, *, budgeted: bool, seen: dict) -> ExitSta
     def fake_budget(candidate_artifact, source_input, config, source_sha256):
         seen["budget_args"] = (candidate_artifact, source_input, config, source_sha256)
         return derived, {
+            "component_count": 3,
             "selected_component_count": 1,
             "deferred_component_count": 2,
             "selected_member_count": 2,
             "deferred_member_count": 3,
+            "selected_upper_bound_comparisons": 4,
+            "selected_upper_bound_alignment_cells": 5,
+            "deferred_upper_bound_comparisons": 6,
+            "deferred_upper_bound_alignment_cells": 7,
+            "max_comparison_count": 10,
+            "max_alignment_cell_budget": 500,
+            "within_budget": True,
+            "components": [{"members": ["a", "b"]}],
+            "selected_components": [{"members": ["a", "b"]}],
+            "deferred_components": [{"members": ["c"]}],
         }
 
     def fake_strict(queue, source_input, *, config, candidate_sha256):
@@ -269,8 +280,22 @@ def test_component_budgeted_v1_derives_and_feeds_the_strict_queue():
             if item["stage"] == "f5.component-budget"
         )
         assert budget_stage["status"] == "completed"
-        assert budget_stage["selected_component_count"] == 1
-        assert budget_stage["deferred_component_count"] == 2
+        assert "cost" not in budget_stage
+        assert "components" not in budget_stage
+        assert budget_stage["budget"] == {
+            "component_count": 3,
+            "selected_component_count": 1,
+            "deferred_component_count": 2,
+            "selected_member_count": 2,
+            "deferred_member_count": 3,
+            "selected_upper_bound_comparisons": 4,
+            "selected_upper_bound_alignment_cells": 5,
+            "deferred_upper_bound_comparisons": 6,
+            "deferred_upper_bound_alignment_cells": 7,
+            "max_comparison_count": 10,
+            "max_alignment_cell_budget": 500,
+            "within_budget": True,
+        }
 
 
 def test_component_budgeted_v1_absent_preserves_the_original_queue_and_artifacts():
@@ -297,6 +322,37 @@ def test_component_budgeted_v1_is_a_cli_flag():
     assert args.component_budgeted_v1 is True
 
 
+def test_verify_label_blind_rejects_optional_queue_presence_mismatch():
+    """The verifier must fail if only one run emits the opt-in queue."""
+    first = {
+        "case": "synthetic",
+        "artifacts": {},
+        "stages": [],
+        "execution": {"duration_seconds": 0},
+        "label_blind_sha256": {
+            "discovery": "d" * 64,
+            "candidates.consensus3-budgeted": "b" * 64,
+        },
+    }
+    second = {
+        **first,
+        "label_blind_sha256": {"discovery": "d" * 64},
+    }
+    calls: list[dict] = []
+
+    def fake_analyze(*args, **kwargs):
+        calls.append(kwargs)
+        return first if len(calls) == 1 else second
+
+    with mock.patch.object(analyze, "analyze", fake_analyze):
+        result = analyze.main([
+            "binary", "--output-dir", "out", "--component-budgeted-v1",
+            "--verify-label-blind",
+        ])
+    assert result == 1
+    assert [call["component_budgeted_v1"] for call in calls] == [True, True]
+
+
 def main() -> int:
     test_the_label_blind_artifact_list_is_the_one_the_spec_names()
     notes = [test_every_stage_is_recorded_even_when_it_does_nothing()]
@@ -304,6 +360,7 @@ def main() -> int:
     test_component_budgeted_v1_derives_and_feeds_the_strict_queue()
     test_component_budgeted_v1_absent_preserves_the_original_queue_and_artifacts()
     test_component_budgeted_v1_is_a_cli_flag()
+    test_verify_label_blind_rejects_optional_queue_presence_mismatch()
     notes.append(test_analyze_succeeds_with_ground_truth_unreadable())
     print("CallKin-Real analyze pipeline: PASS")
     for note in notes:
