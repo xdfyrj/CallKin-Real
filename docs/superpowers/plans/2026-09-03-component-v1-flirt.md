@@ -204,7 +204,51 @@ Run:
 
 Commit message: `feat: run component-budgeted V1 before FLIRT propagation`
 
-### Task 5: Freeze zoxide predictions, score them, and record the result
+### Task 5: Add an exact catalog scorer for CallKin-Real F10
+
+**Files:**
+- Create: `f10_catalog_evaluate.py`
+- Create: `test_f10_catalog_evaluate.py`
+
+**Interfaces:**
+- Consumes: an all-Rust catalog, `labels.direct.json`, and one strict/rescue
+  F10 prediction, only in the evaluation process.
+- Produces: exact origin+owner direct/propagated/combined metrics and an
+  inspectable provenance record.
+
+- [ ] **Step 1: Write synthetic evaluation tests**
+
+Cover strict and rescue methods, different catalog/prediction ID biases joined
+by decoded address, direct-baseline invariance using all values returned by
+`direct_seeds()`, owner-only errors, unknown direct/propagated addresses,
+stripped/hash mismatch, and unchanged input files.
+
+- [ ] **Step 2: Run and verify RED**
+
+Run: `/usr/bin/python3.12 test_f10_catalog_evaluate.py`
+
+- [ ] **Step 3: Implement the evaluation-only scorer**
+
+Reuse the frozen F10 artifact validator and the exact metric semantics already
+used by `flirt_audit.py`, but do not import the old scorer at runtime. Bind
+identity by stripped SHA-256 and decoded function address, not synthetic
+case/build strings. Fail closed when a propagated member has no catalog
+address; count an unknown direct address separately.
+
+- [ ] **Step 4: Verify GREEN and the oracle firewall**
+
+Run:
+
+```text
+/usr/bin/python3.12 test_f10_catalog_evaluate.py
+/usr/bin/python3.12 test_oracle_firewall.py
+```
+
+- [ ] **Step 5: Commit**
+
+Commit message: `eval: score CallKin FLIRT propagation by exact catalog identity`
+
+### Task 6: Freeze zoxide predictions, score them, and record the result
 
 **Files:**
 - Create outside Git results: a new zoxide component-budgeted queue, strict family, F7 rescue, direct-label, and strict/rescue propagation artifacts.

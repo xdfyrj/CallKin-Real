@@ -75,3 +75,9 @@ Exact correctness requires both origin and owner to match. Success requires:
 
 If the gate fails, report the measured failure without changing the queue
 policy. A positive result supports only a zoxide O3S case-specific claim.
+
+The scorer is evaluation-only. It binds catalog, label, and prediction files
+by their raw SHA-256 values and the stripped-binary SHA-256. If member-ID
+biases differ, it decodes both IDs to the underlying function address and
+joins on that address; it never changes the frozen prediction file. Synthetic
+case/build names are recorded but are not treated as binary identity.
