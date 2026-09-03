@@ -21,6 +21,10 @@ of 10,000 detailed comparisons and 500,000,000 alignment cells.
   pair comparison, clustering, or rescue.
 - Direct FLIRT matches remain ordinary V1 members when their bodies are
   complete. They are not anchors merely because FLIRT named them.
+- Every actual `direct-flirt` result remains in the direct baseline, including
+  an address outside CallKin-Real's discovered/grouping universe. Such a label
+  is reported as outside the universe and cannot propagate; it is not silently
+  dropped. Oxidizer wrapper and cleanup inferences remain non-seed evidence.
 - F10 is applied only after F6 and F7. One seed may label a family; multiple
   seeds must agree on both `canonical_origin` and `owner`. A conflict labels
   nobody, and a direct label is never overwritten.

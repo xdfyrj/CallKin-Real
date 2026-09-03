@@ -113,7 +113,51 @@ Run:
 
 Commit message: `fix: preserve opaque abstention across the V1 adapter`
 
-### Task 3: Wire the cost-bounded mode into the analysis pipeline
+### Task 3: Preserve direct FLIRT results outside the grouping universe
+
+**Files:**
+- Modify: `flirt_labels.py`
+- Modify: `test_label_propagation.py`
+
+**Interfaces:**
+- Consumes: validated `matches` and `unmatched_addresses` in
+  `labels.direct.json`.
+- Produces: every `direct-flirt` observation as a direct baseline record, while
+  wrapper/cleanup observations remain non-seed evidence.
+
+- [ ] **Step 1: Write the failing baseline test**
+
+Create a label artifact with one joined direct match, one unmatched direct
+match, one unmatched wrapper, and one unmatched cleanup record. Require F10 to
+retain both direct matches, mark the unmatched direct member `in_universe:
+false`, and propagate from neither unmatched nor inferred evidence.
+
+- [ ] **Step 2: Run and verify RED**
+
+Run: `/usr/bin/python3.12 test_label_propagation.py`
+
+Expected: the unmatched direct record is absent from `direct_labels`.
+
+- [ ] **Step 3: Make direct baseline extraction complete**
+
+Have `direct_seeds()` return `matches` plus only the `direct-flirt` records in
+`unmatched_addresses`. Keep validation, deterministic order, duplicate-member
+rejection, and the non-seed treatment of wrapper/cleanup evidence.
+
+- [ ] **Step 4: Verify GREEN**
+
+Run:
+
+```text
+/usr/bin/python3.12 test_label_propagation.py
+/usr/bin/python3.12 test_flirt_invariance.py
+```
+
+- [ ] **Step 5: Commit**
+
+Commit message: `fix: preserve direct FLIRT results outside the V1 universe`
+
+### Task 4: Wire the cost-bounded mode into the analysis pipeline
 
 **Files:**
 - Modify: `analyze.py`
@@ -156,7 +200,7 @@ Run:
 
 Commit message: `feat: run component-budgeted V1 before FLIRT propagation`
 
-### Task 4: Freeze zoxide predictions, score them, and record the result
+### Task 5: Freeze zoxide predictions, score them, and record the result
 
 **Files:**
 - Create outside Git results: a new zoxide component-budgeted queue, strict family, F7 rescue, direct-label, and strict/rescue propagation artifacts.
