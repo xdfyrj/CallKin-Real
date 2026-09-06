@@ -5,12 +5,13 @@ nothing in the analysis path imports it. That is checked, not asserted:
 `test_oracle_firewall.py` walks the import graph of every analysis module and
 fails if this file, a catalog, or a scorer appears in it.
 
-Three scores, kept apart, because combining them hides which stage failed.
+Three score groups, kept apart, because combining them hides which stage failed.
 
     discovery   did the tool find the function, with the right extent, and
                 did its bytes decode
     grouping    V0 relation-only, V1 strict, V1 strict+F7 and the experimental
-                provisional attachments on the same discovered universe
+                strict-core and F7-core provisional attachments on the same
+                discovered universe
     label       direct FLIRT correctness, and what propagation added
 
 Spec 12.1 is explicit that boundary evaluation stays its own result and is
@@ -206,9 +207,11 @@ def score_grouping(
     neutral: dict[tuple[str, str], str] | None = None,
     *,
     relaxed: dict[str, Any] | None = None,
+    rescue_relaxed: dict[str, Any] | None = None,
     family_artifact_sha256: str | None = None,
+    rescue_artifact_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Spec 12.2. The three methods on one universe, so they are comparable."""
+    """Spec 12.2. The grouping methods on one universe, so they are comparable."""
     universe = {
         record["id"] for record in universe_payload["functions"]
         if record["grouping_role"] == "member"
@@ -259,28 +262,77 @@ def score_grouping(
             "alignment_cell_count": summary["reserved_alignment_cells"],
         }
 
-    if relaxed is None:
-        methods["v1_relaxed_provisional"] = {"status": "not produced"}
-    else:
+    def score_relaxed_variant(
+        artifact: dict[str, Any],
+        *,
+        method: str,
+        rescue: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if families is None or family_artifact_sha256 is None:
             raise EvaluationError(
                 "a relaxed artifact requires the strict family artifact it extends"
             )
+        if method == "v1_strict_rescue_relaxed_provisional":
+            if rescue is None or rescue_artifact_sha256 is None:
+                raise EvaluationError(
+                    "an F7 relaxed artifact requires the rescue artifact and its SHA-256"
+                )
+        rescue_for_scoring = (
+            rescue if method == "v1_strict_rescue_relaxed_provisional" else None
+        )
+        rescue_sha_for_scoring = (
+            rescue_artifact_sha256
+            if method == "v1_strict_rescue_relaxed_provisional"
+            else None
+        )
         groups = v1_relaxed.groups_for_scoring(
-            relaxed,
+            artifact,
             families,
             family_artifact_sha256=family_artifact_sha256,
+            rescue_artifact=rescue_for_scoring,
+            rescue_artifact_sha256=rescue_sha_for_scoring,
         )
-        methods["v1_relaxed_provisional"] = {
+        partition = artifact.get(
+            "partition",
+            "f7-core" if method == "v1_strict_rescue_relaxed_provisional" else "strict-core",
+        )
+        provenance = artifact.get("provenance")
+        if not isinstance(provenance, dict):
+            raise EvaluationError(f"{method} has no provenance")
+        metrics = artifact.get("metrics", {})
+        return {
             **score_partition(groups, ground_truth, universe, neutral),
-            "attachment_count": relaxed["summary"]["attached_member_count"],
-            "ambiguous_member_count": relaxed["summary"]["ambiguous_member_count"],
-            "vetoed_hypothesis_count": relaxed["summary"]["vetoed_hypothesis_count"],
+            "partition": partition,
+            "provenance": dict(provenance),
+            "attachment_count": artifact["summary"]["attached_member_count"],
+            "ambiguous_member_count": artifact["summary"]["ambiguous_member_count"],
+            "vetoed_hypothesis_count": artifact["summary"]["vetoed_hypothesis_count"],
+            "comparison_count": metrics.get("total_detailed_comparisons"),
+            "alignment_cell_count": metrics.get("total_alignment_cells"),
+            "budget_limited": metrics.get("budget_limited"),
             "note": (
                 "experimental provisional attachments; not accepted families "
                 "and never used for FLIRT propagation"
             ),
         }
+
+    methods["v1_relaxed_provisional"] = (
+        {"status": "not produced"}
+        if relaxed is None
+        else score_relaxed_variant(
+            relaxed,
+            method="v1_relaxed_provisional",
+        )
+    )
+    methods["v1_strict_rescue_relaxed_provisional"] = (
+        {"status": "not produced"}
+        if rescue_relaxed is None
+        else score_relaxed_variant(
+            rescue_relaxed,
+            method="v1_strict_rescue_relaxed_provisional",
+            rescue=rescue,
+        )
+    )
     return {"universe_member_count": len(universe), "methods": methods}
 
 
@@ -614,6 +666,9 @@ def evaluate(
     families, families_sha = optional(".v1.families.strict.json")
     rescue, rescue_sha = optional(".v1.families.rescue.json")
     relaxed, relaxed_sha = optional(".v1.families.relaxed.json")
+    rescue_relaxed, rescue_relaxed_sha = optional(
+        ".v1.families.rescue-relaxed.json"
+    )
     labels, labels_sha = optional(".labels.direct.json")
     propagation, propagation_sha = optional(".v1.labels.strict.json")
 
@@ -645,6 +700,7 @@ def evaluate(
             "families_strict_sha256": families_sha,
             "families_rescue_sha256": rescue_sha,
             "families_relaxed_sha256": relaxed_sha,
+            "families_rescue_relaxed_sha256": rescue_relaxed_sha,
             "labels_direct_sha256": labels_sha,
             "label_propagation_sha256": propagation_sha,
             "linkage_audit_sha256": (
@@ -662,7 +718,9 @@ def evaluate(
             rescue,
             neutral,
             relaxed=relaxed,
+            rescue_relaxed=rescue_relaxed,
             family_artifact_sha256=families_sha,
+            rescue_artifact_sha256=rescue_sha,
         ),
         "label": score_labels(ground_truth, labels, propagation, universe),
     }
