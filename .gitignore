@@ -5,3 +5,14 @@ results/
 # Local research checkouts and migration backups.
 /worktrees/
 /.local/
+
+# Local environments and unpublished experiment caches.
+.venv/
+.codex/
+.ruff_cache/
+**/*_angr_rtdb/
+/replay-data/
+/workspace/
+
+# Retained small reports are published; run caches remain ignored.
+!docs/results/

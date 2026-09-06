@@ -1,7 +1,8 @@
 # CallKin-Real
 
-Recovering monomorphized generic families from stripped, optimized x86-64 Rust
-ELF and PE32+ binaries, using nothing but the stripped binary.
+Research prototype for grouping functions in stripped, optimized x86-64 Rust
+ELF and PE32+ binaries using call relations and body comparisons. Optional
+FLIRT names are attached after grouping.
 
 The analyzer never reads a non-stripped binary, source code, ground truth, a
 symbol list, a candidate list, or a symbol-boundary file. That is enforced by a
@@ -9,6 +10,22 @@ test rather than by convention: `test_oracle_firewall.py` walks the import
 graph from every analysis entry point and fails if a ground-truth module, a
 catalog or a scorer appears anywhere in it, and `test_analyze.py` runs the
 whole pipeline in a subprocess where opening any ground-truth path raises.
+
+## Installation
+
+Use Python 3.12 or later for the analyzer and regression tests.
+
+```bash
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python run_tests.py
+```
+
+The package requirements pin the angr version and its compatible parser.
+Oxidizer is a separate optional installation, described below; use
+`--no-flirt` when testing anonymous grouping alone. The historical relaxed
+replay retains its stricter CPython 3.14.7 requirement.
 
 ## One command
 
@@ -64,6 +81,13 @@ A stage that cannot run is recorded with a reason rather than leaving a missing
 file. `f6.strict` may be `budget-refused`, `labels.direct` may be
 `unavailable`, `f7.rescue` is `skipped` when F6 accepted nothing. A missing
 file with nothing beside it is the one outcome indistinguishable from a bug.
+
+Use `--component-budgeted-v1` to select complete candidate components within
+the fixed comparison budget. This can defer a whole expensive component; it
+does not claim to process every candidate faster.
+
+`run.manifest.json` is the pipeline summary. The lower-level `run.json` is the
+input used by `evaluate.py` and the standalone relaxed command.
 
 ## Three separated statuses
 
@@ -180,57 +204,61 @@ budget-refused -- so it is covered only by the frozen control suite.
 ## Running the tests
 
 ```bash
-python test_frozen_inventory.py
-python test_f4_golden.py
-python test_oracle_firewall.py
-python test_label_propagation.py
-python test_callkin_real.py
-python test_role_label_separation.py
-python test_body_universe.py
-python test_v1_relaxed.py
+python run_tests.py
 ```
 
-The suites that exercise a real binary take one from the environment:
+Each root-level regression script runs in a separate Python process. Frozen V1
+code and the 556-pair floating-point golden are checked against bundled reference
+identities. A default checkout does not require an adjacent development worktree.
+
+The real-binary checks are optional and explicit:
 
 ```bash
-CALLKIN_REAL_TEST_BINARY=/path/to/stripped.bin python test_analyze.py
-CALLKIN_REAL_TEST_BINARY=/path/to/stripped.bin python test_v1_grouping.py
-CALLKIN_REAL_TEST_BINARY=/path/to/stripped.bin python test_v1_rescue.py
-CALLKIN_REAL_TEST_BINARY=/path/to/stripped.bin python test_v1_retrieval.py
-CALLKIN_REAL_TEST_BINARY=/path/to/stripped.bin python test_real_v1_adapter.py
-CALLKIN_REAL_TEST_BINARY=/path/to/stripped.bin python test_f4_reads_r2_bodies.py
-CALLKIN_REAL_TEST_BINARY=/path/to/stripped.bin python test_flirt_invariance.py
+CALLKIN_REAL_TEST_BINARY=/path/to/stripped.bin python run_tests.py
 ```
 
-Without the variable they skip the real-binary part and say so. Several of
-them also compare against the frozen V1 checkout at `../v0-engine-py-f10` and
-report when it is absent rather than passing silently.
+For the full archived replay-input integrity check, supply the original data
+roots documented below and set `CALLKIN_CHECK_REPLAY_INPUTS=1`. Missing inputs or
+hash drift then fail the check. Without those large original caches, the unit
+tests still exercise the pin rejection and prediction-before-scoring boundaries.
 
 ## Experimental relaxed V1
 
-After strict F6 has written `run.v1.families.strict.json`, build the separate
-provisional attachment artifact with:
+The `analyze.py` pipeline retains its original strict-decision provisional pass.
+The enhanced consensus2/F7 relaxed path is a separate command after analysis:
 
 ```bash
-python v1_relaxed.py results/run.json
+python v1_relaxed.py results/zoxide/run.json \
+  --rescue results/zoxide/run.v1.families.rescue.json
 ```
 
-This does not change a strict family. A singleton may attach provisionally to
-one strict core when a consensus3 candidate pair is a body `match`, while
-`unknown`, `abstain`, and missing comparisons do not veto it. A hard `reject`
-does veto it, and a singleton compatible with two cores stays ambiguous.
-Each attachment is scored separately, so two provisional members are never
-made siblings by transitivity. The resulting
-`run.v1.families.relaxed.json` is evaluation-only and cannot be used for
-FLIRT label propagation. The frozen formal config currently has no
-`structure_reject_threshold`, so its strict artifacts may contain no hard
-`reject` decisions; relaxed results must therefore be reported as exploratory,
-not as a replacement for strict V1.
+This writes strict-core and, when F7 input is present, F7-core provisional
+attachment artifacts. They do not replace strict families and are not used as
+FLIRT seeds. The evaluator accepts these distinct methods on the same universe.
 
+The pinned three-program research replay uses external data roots:
 
-## Local workspace organization (2026-09-07)
+```bash
+export CALLKIN_V1_INPUT_ROOT=/path/to/original-v1-data
+export CALLKIN_FROZEN_INPUT_ROOT=/path/to/original-frozen-data
+export CALLKIN_V0_INPUT_ROOT=/path/to/original-v0-data
+CALLKIN_CHECK_REPLAY_INPUTS=1 python test_replay_relaxed.py
+python replay_relaxed.py --mode dry-price
+```
 
-Related experiment worktrees are preserved under `worktrees/`. The current
-branch and uncommitted changes were kept; this directory move does not merge
-experiment branches into main. See `../CALLKIN-WORKSPACE.md` for the directory
-map and the WSL wrapper for commands that use historical paths.
+Prediction and scoring modes of that archived replay require CPython 3.14.7.
+The input files must match the digests in `replay_relaxed.py`; selecting a
+different directory does not relax those checks. Full original body caches are
+not bundled with the repository.
+
+## Research outputs
+
+[Retained zoxide results](docs/results/README.md) record the original run and
+its hashes: 339 directly correct names became 341 with propagation, with 9
+existing incorrect names unchanged. This is one limited positive execution,
+not general 100% propagation accuracy. The independent dust attempt did not
+reach prediction before running out of memory.
+
+[CallKin](https://github.com/xdfyrj/CallKin) contains the corresponding research
+baseline, controlled counterexamples and broader evaluation records.
+See [third-party notices](THIRD_PARTY_NOTICES.md) for derived fixture licenses.

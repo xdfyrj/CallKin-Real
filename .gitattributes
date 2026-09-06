@@ -6,3 +6,9 @@
 # The F4 golden is a gzip. text=auto would guess, and a guess that goes
 # wrong here silently rewrites the bytes the 556-pair regression reads.
 *.gz binary
+
+# Preserve byte-identical retained research records on every platform.
+docs/results/*.json -text
+
+# Preserve upstream license notices without applying project whitespace rules.
+third_party/licenses/** -whitespace

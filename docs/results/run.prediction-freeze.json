@@ -1,0 +1,78 @@
+{
+  "artifact": "callkin-real-component-v1-flirt-prediction-freeze",
+  "binary_sha256": "3c07eb724eefb1bc5052c3cdf3e8597f9c51eb42a9b09b86265d9994bc8bbf83",
+  "component_budget": {
+    "actual_alignment_cells": 25890560,
+    "actual_comparisons": 4269,
+    "budget_blocked_merges": 0,
+    "deferred_components": 1,
+    "deferred_members": 319,
+    "reserved_alignment_cells": 82317073,
+    "reserved_comparisons": 9757,
+    "selected_components": 3503,
+    "selected_members": 5016
+  },
+  "direct_baseline": {
+    "direct_labels_core_sha256": "374553d99a25f9bc6bb67930cd495886c05290dbfe3548783569f48f9699b71d",
+    "in_v1_universe_count": 332,
+    "joined_nonopaque_discovery_count": 360,
+    "outside_v1_universe_count": 132,
+    "raw_direct_count": 464
+  },
+  "f7": {
+    "accepted_components": 0,
+    "budget_blocked_components": 0,
+    "candidate_components": 28,
+    "rejected_components": 28,
+    "strict_family_count": 133,
+    "strict_member_count": 472
+  },
+  "file_sha256": {
+    "body": "de5b5409110c9a99c4039603f62446b07a94e04ab894acf33bf52adf77cf4805",
+    "cached_oxidizer": "138a81768c018ac6e6f3c2f542bce758a28847373bb3fae32727b13a06648fa6",
+    "component_queue": "24f6883b36ab7b92cecfa8cccf1717a3a3b367a252f81000d6d4f9bdc01654ef",
+    "consensus2": "6a85879a577ff019083af747bb268d74e25ebb5e4ab9c9036b13443e83067622",
+    "consensus3": "077c1cfbf22b7e82c13c1703a77e17d1f3bec4b82ef2356a421969fe01837161",
+    "direct_labels": "ce66b6cdc13d08d89c669f1edf864c2e67c3ac9cb0997996ae9ffa6e545132fb",
+    "discovery": "20686689825b6a3e40846b1e3f7602b8a416805e07ad9e88a140400fa1866ea8",
+    "formal_config": "77f394244c67b6633698e80af5265da4544c8ad5033aff7d0474a5ff8f1eebfa",
+    "multi": "0a32017adaf2dcf10235afda1e834232fff44a750cafdb40fe3e3bb4e89a2390",
+    "relation": "d203bd0c1bf2dc19a57e96764fbd394ecaee86fb872c4ca549e0d5d9e05e9896",
+    "rescue_families": "dae99e50dfd5e4b7c59208567c94bcb99180109d143ca84945166b206df74d5c",
+    "rescue_prediction": "1cea1451655fe6ae80f96646b62427b9640e46deeee507e376c8cacd532c5f62",
+    "run": "1395938b69d55b4fb416dfeb0d56cddc441c9f7a2984dc13cbb96b148a8f17d7",
+    "strict_families": "e8b0c163d27a1cd7ef38d9147d15b2baabcf5c74f41935faca3f3b710b663067",
+    "strict_prediction": "c2bb107a94bb8fe708b96c9fa8a6a30265fc5afc86d74819519be84e0ce5f0f8",
+    "universe": "43a4a990d6bd40ca03edb385f27cd74c708ae6533d02c0edddba6bf3a06d9f0b"
+  },
+  "frozen_rules": {
+    "conflicting_family": "propagate_nobody",
+    "direct_identity": "canonical_origin_and_owner",
+    "direct_labels_overwritten": false,
+    "formal_max_alignment_cells": 500000000,
+    "formal_max_comparisons": 10000,
+    "labels_do_not_affect_grouping": true,
+    "no_post_score_tuning": true
+  },
+  "inputs_verified_unchanged": true,
+  "oracle_status": "not_opened_when_this_manifest_was_written",
+  "prediction_code_commit": "b313cb7",
+  "predictions": {
+    "rescue": {
+      "conflict_family_count": 0,
+      "propagated_count": 3
+    },
+    "strict": {
+      "conflict_family_count": 0,
+      "propagated_count": 3
+    }
+  },
+  "schema_version": 1,
+  "success_gate": {
+    "combined_catalog_coverage_must_increase": true,
+    "direct_baseline_must_be_unchanged": true,
+    "newly_correct_members_minimum": 1,
+    "wrongly_propagated_families_maximum": 0,
+    "wrongly_propagated_members_maximum": 0
+  }
+}

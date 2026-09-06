@@ -1,0 +1,14 @@
+{
+  "run.prediction-freeze.json": {
+    "source_path": "CallKin-Real/worktrees/CallKin-Real-component-v1-flirt/results/zoxide-component-v1-flirt-2026-09-03/run.prediction-freeze.json",
+    "sha256": "ee32070c13df8e1f8fd1aa96d3f6851f79d5adff5f2bd1cadde861c2439a6112"
+  },
+  "run.v1.labels.strict.catalog-eval.json": {
+    "source_path": "CallKin-Real/worktrees/CallKin-Real-component-v1-flirt/results/zoxide-component-v1-flirt-2026-09-03/run.v1.labels.strict.catalog-eval.json",
+    "sha256": "098ec6249beddfdbdc719442d0d582928c7d1871a58e976850e8bf3149b69619"
+  },
+  "run.v1.labels.rescue.catalog-eval.json": {
+    "source_path": "CallKin-Real/worktrees/CallKin-Real-component-v1-flirt/results/zoxide-component-v1-flirt-2026-09-03/run.v1.labels.rescue.catalog-eval.json",
+    "sha256": "b9a0a25bdfeda6bc037e8486abce6d0169b65d667d18efb1275307f411095d75"
+  }
+}
