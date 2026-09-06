@@ -226,3 +226,11 @@ FLIRT label propagation. The frozen formal config currently has no
 `structure_reject_threshold`, so its strict artifacts may contain no hard
 `reject` decisions; relaxed results must therefore be reported as exploratory,
 not as a replacement for strict V1.
+
+
+## Local workspace organization (2026-09-07)
+
+Related experiment worktrees are preserved under `worktrees/`. The current
+branch and uncommitted changes were kept; this directory move does not merge
+experiment branches into main. See `../CALLKIN-WORKSPACE.md` for the directory
+map and the WSL wrapper for commands that use historical paths.
