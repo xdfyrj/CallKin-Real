@@ -186,6 +186,94 @@ def test_a_member_with_no_body_record_is_refused():
             raise AssertionError("a member with no body was accepted")
 
 
+def test_opaque_count_is_aliased_and_frozen_cache_abstains():
+    body = _body_payload()
+    body["functions"][0]["quality"]["opaque_indirect_jump_count"] = 1
+
+    with tempfile.TemporaryDirectory(prefix="callkin-adapter-") as directory:
+        loaded = load_real_v1_input(*_chain(Path(directory), body=body))
+
+    opaque = loaded.bodies["FUN_00101000"]
+    assert opaque.quality["opaque_indirect_jumps"] == 1
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "frozen_v1"))
+    try:
+        from v1_candidates import PairKey
+        from v1_engine import PairEvidenceCache, PairPolicyConfig
+    finally:
+        sys.path.remove(str(Path(__file__).resolve().parent / "frozen_v1"))
+
+    config = PairPolicyConfig.from_dict({
+        "policy": {
+            "structure_match_threshold": 0.95,
+            "slot_match_threshold": 1.0,
+            "abstain_on_opaque_indirect": True,
+        },
+    })
+    cache = PairEvidenceCache(loaded.bodies, [], config)
+    pair = PairKey.make("FUN_00101000", "FUN_00102000")
+    assert not cache.would_compare(pair)
+    assert cache.get_evaluation(pair).decision == "abstain"
+    assert cache.total_comparisons == 0
+    assert cache.total_alignment_cells == 0
+
+
+def test_conflicting_opaque_quality_keys_are_refused():
+    body = _body_payload()
+    body["functions"][0]["quality"].update({
+        "opaque_indirect_jump_count": 1,
+        "opaque_indirect_jumps": 2,
+    })
+
+    with tempfile.TemporaryDirectory(prefix="callkin-adapter-") as directory:
+        try:
+            load_real_v1_input(*_chain(Path(directory), body=body))
+        except ArtifactChainError as exc:
+            assert "opaque_indirect" in str(exc)
+        else:
+            raise AssertionError("conflicting opaque quality keys were accepted")
+
+
+def test_explicit_none_opaque_plural_is_refused():
+    body = _body_payload()
+    body["functions"][0]["quality"].update({
+        "opaque_indirect_jump_count": 1,
+        "opaque_indirect_jumps": None,
+    })
+
+    with tempfile.TemporaryDirectory(prefix="callkin-adapter-") as directory:
+        try:
+            load_real_v1_input(*_chain(Path(directory), body=body))
+        except ArtifactChainError as exc:
+            assert "opaque_indirect_jumps" in str(exc)
+        else:
+            raise AssertionError("explicit null opaque plural was accepted")
+
+
+def test_opaque_quality_counts_must_be_nonnegative_integers():
+    invalid = (
+        ("opaque_indirect_jump_count", True),
+        ("opaque_indirect_jump_count", 1.5),
+        ("opaque_indirect_jump_count", "1"),
+        ("opaque_indirect_jump_count", -1),
+        ("opaque_indirect_jumps", True),
+        ("opaque_indirect_jumps", 1.5),
+        ("opaque_indirect_jumps", "1"),
+        ("opaque_indirect_jumps", -1),
+    )
+    for field, value in invalid:
+        body = _body_payload()
+        body["functions"][0]["quality"]["opaque_indirect_jump_count"] = 1
+        body["functions"][0]["quality"][field] = value
+        with tempfile.TemporaryDirectory(prefix="callkin-adapter-") as directory:
+            try:
+                load_real_v1_input(*_chain(Path(directory), body=body))
+            except ArtifactChainError as exc:
+                assert field in str(exc)
+            else:
+                raise AssertionError(f"invalid {field}={value!r} was accepted")
+
+
 def test_a_label_anywhere_in_the_universe_is_refused():
     for field, value in (
         ("flirt", {"name": "core::ptr::drop_in_place<T>"}),
@@ -307,6 +395,10 @@ def main() -> int:
     test_artifacts_from_two_binaries_are_refused()
     test_the_wrong_artifact_in_the_wrong_slot_is_refused()
     test_a_member_with_no_body_record_is_refused()
+    test_opaque_count_is_aliased_and_frozen_cache_abstains()
+    test_conflicting_opaque_quality_keys_are_refused()
+    test_explicit_none_opaque_plural_is_refused()
+    test_opaque_quality_counts_must_be_nonnegative_integers()
     test_a_label_anywhere_in_the_universe_is_refused()
     test_assert_label_free_looks_at_keys_not_at_values()
     test_the_relation_reshape_keeps_only_what_1_wl_saw()

@@ -110,10 +110,14 @@ def build_label_artifact(
             )
         seen[(evidence, address)] = name
 
+        mapped_address = _address(
+            item.get("mapped_address", address),
+            where=f"{where}.mapped_address",
+        )
         record = {
             "member": callkin_real.function_id(address),
             "address": callkin_real.hex_address(address),
-            "mapped_address": callkin_real.hex_address(address),
+            "mapped_address": callkin_real.hex_address(mapped_address),
             "evidence": evidence,
             "seedable": SEEDABLE[evidence],
             **normalize_name(name),
@@ -170,27 +174,80 @@ def validate_label_artifact(data: object) -> dict[str, Any]:
         raise LabelArtifactError(f"not a {LABEL_ARTIFACT} artifact")
     if data["policy"]["seed_policy"] != "direct-flirt-only":
         raise LabelArtifactError("label artifact seed policy is not direct-flirt-only")
+    seen_evidence_addresses: set[tuple[str, int]] = set()
     for key, evidence in (
         ("matches", DIRECT_FLIRT),
         ("propagated_wrappers", PROPAGATED_WRAPPER),
         ("cleanup_heuristics", CLEANUP_HEURISTIC),
     ):
+        if not isinstance(data[key], list):
+            raise LabelArtifactError(f"{key} must be a list")
         for record in data[key]:
+            if not isinstance(record, dict):
+                raise LabelArtifactError(f"{key} records must be objects")
             if record["evidence"] != evidence:
                 raise LabelArtifactError(f"{key} holds a {record['evidence']} record")
             if record["seedable"] is not SEEDABLE[evidence]:
                 raise LabelArtifactError(f"{key} record has the wrong seedable flag")
+            address = _address(record["address"], where=f"{key}.address")
+            marker = (evidence, address)
+            if marker in seen_evidence_addresses:
+                raise LabelArtifactError(
+                    f"duplicate label evidence at 0x{address:x}: {evidence}"
+                )
+            seen_evidence_addresses.add(marker)
+
+    unmatched = data["unmatched_addresses"]
+    if not isinstance(unmatched, list):
+        raise LabelArtifactError("unmatched_addresses must be a list")
+    expected_unmatched_fields = {
+        "member", "address", "mapped_address", "evidence", "seedable",
+        "canonical_origin", "owner", "reason",
+    }
+    for index, record in enumerate(unmatched):
+        where = f"unmatched_addresses[{index}]"
+        if not isinstance(record, dict) or set(record) != expected_unmatched_fields:
+            raise LabelArtifactError(f"{where} has invalid fields")
+        evidence = record["evidence"]
+        if evidence not in SEEDABLE:
+            raise LabelArtifactError(f"{where}.evidence is {evidence!r}")
+        if record["seedable"] is not SEEDABLE[evidence]:
+            raise LabelArtifactError(f"{where} has the wrong seedable flag")
+        if record["reason"] != "no_discovered_function":
+            raise LabelArtifactError(f"{where}.reason is invalid")
+        if any(
+            not isinstance(record[key], str) or not record[key]
+            for key in ("member", "address", "mapped_address", "canonical_origin", "owner")
+        ):
+            raise LabelArtifactError(f"{where} has invalid values")
+        address = _address(record["address"], where=f"{where}.address")
+        _address(record["mapped_address"], where=f"{where}.mapped_address")
+        marker = (evidence, address)
+        if marker in seen_evidence_addresses:
+            raise LabelArtifactError(
+                f"duplicate label evidence at 0x{address:x}: {evidence}"
+            )
+        seen_evidence_addresses.add(marker)
     return data
 
 
 def direct_seeds(artifact: dict[str, Any]) -> list[dict[str, Any]]:
-    """The seeds F10 may use: direct-flirt matches, joined to the universe.
+    """The seeds F10 may use: every direct-flirt observation.
 
-    Nothing from `propagated_wrappers`, `cleanup_heuristics` or
-    `unmatched_addresses` reaches this list, and the artifact is revalidated
-    first so a hand-edited file cannot smuggle one in.
+    Joined matches and direct results that did not join the discovery universe
+    are both direct evidence. Wrapper and cleanup inferences remain excluded,
+    and the artifact is revalidated first so a schema-inconsistent edit cannot
+    smuggle one in. Raw-file hashes bind valid artifacts at the consumer edge.
     """
     validate_label_artifact(artifact)
+    records = [
+        *artifact["matches"],
+        *(
+            record
+            for record in artifact["unmatched_addresses"]
+            if record.get("evidence") == DIRECT_FLIRT
+        ),
+    ]
     return [
         {
             "address": record["address"],
@@ -198,7 +255,7 @@ def direct_seeds(artifact: dict[str, Any]) -> list[dict[str, Any]]:
             "canonical_origin": record["canonical_origin"],
             "owner": record["owner"],
         }
-        for record in artifact["matches"]
+        for record in records
     ]
 
 

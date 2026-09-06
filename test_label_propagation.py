@@ -257,10 +257,103 @@ def test_a_match_with_no_discovered_function_is_kept_as_unmatched():
     unmatched = labels["unmatched_addresses"][0]
     assert unmatched["member"] == IDS[D]
     assert unmatched["reason"] == "no_discovered_function"
-    # And it is not a seed.
+    # It remains direct evidence even though it did not join discovery.
     assert [seed["address"] for seed in direct_seeds(labels)] == [
-        callkin_real.hex_address(A)
+        callkin_real.hex_address(A),
+        callkin_real.hex_address(D),
     ]
+
+
+def test_unmatched_direct_stays_in_baseline_and_preserves_mapped_address():
+    """Every direct result is retained, but only joined direct results propagate."""
+    labels = build_label_artifact(
+        {
+            "matches": [
+                {
+                    "address": callkin_real.hex_address(D),
+                    "mapped_address": "0x9004",
+                    "name": "core::ptr::drop_in_place<outside>",
+                    "evidence": DIRECT_FLIRT,
+                },
+                {
+                    "address": callkin_real.hex_address(C),
+                    "mapped_address": "0x9003",
+                    "name": "core::ptr::drop_in_place<cleanup>",
+                    "evidence": CLEANUP_HEURISTIC,
+                },
+                {
+                    "address": callkin_real.hex_address(B),
+                    "mapped_address": "0x9002",
+                    "name": "core::ptr::drop_in_place<wrapper>",
+                    "evidence": PROPAGATED_WRAPPER,
+                },
+                {
+                    "address": callkin_real.hex_address(A),
+                    "mapped_address": "0x9001",
+                    "name": "core::ptr::drop_in_place<joined>",
+                    "evidence": DIRECT_FLIRT,
+                },
+            ]
+        },
+        binary_sha256=BINARY,
+        discovery_addresses={A},
+    )
+
+    families = _families(
+        [("F1", [IDS[A], IDS[B], IDS[C]], "accepted")], targets=(A, B, C)
+    )
+    artifact = _run(families, labels)
+    baseline = {item["member"]: item for item in artifact["direct_labels"]}
+    assert set(baseline) == {IDS[A], IDS[D]}
+    assert baseline[IDS[A]]["in_universe"] is True
+    assert baseline[IDS[A]]["mapped_address"] == "0x9001"
+    assert baseline[IDS[D]]["in_universe"] is False
+    assert baseline[IDS[D]]["mapped_address"] == "0x9004"
+
+    propagated = {item["member"]: item for item in artifact["propagated_labels"]}
+    assert set(propagated) == {IDS[B], IDS[C]}
+    assert all(item["seed_members"] == [IDS[A]] for item in propagated.values())
+
+    assert labels["matches"][0]["address"] == callkin_real.hex_address(A)
+    assert labels["matches"][0]["mapped_address"] == "0x9001"
+    assert [
+        (record["address"], record["evidence"], record["mapped_address"])
+        for record in labels["unmatched_addresses"]
+    ] == [
+        (callkin_real.hex_address(B), PROPAGATED_WRAPPER, "0x9002"),
+        (callkin_real.hex_address(C), CLEANUP_HEURISTIC, "0x9003"),
+        (callkin_real.hex_address(D), DIRECT_FLIRT, "0x9004"),
+    ]
+    seeds = direct_seeds(labels)
+    assert [(seed["address"], seed["mapped_address"]) for seed in seeds] == [
+        (callkin_real.hex_address(A), "0x9001"),
+        (callkin_real.hex_address(D), "0x9004"),
+    ]
+
+
+def test_unmatched_inference_cannot_be_relabelled_as_direct():
+    for evidence in (PROPAGATED_WRAPPER, CLEANUP_HEURISTIC):
+        labels = _labels((B, "core::ptr::drop_in_place<T>", evidence), discovered=(A, C, D))
+        labels["unmatched_addresses"][0]["evidence"] = DIRECT_FLIRT
+        try:
+            direct_seeds(labels)
+        except LabelArtifactError as exc:
+            assert "unmatched_addresses" in str(exc)
+        else:
+            raise AssertionError(f"{evidence} was accepted as unmatched direct evidence")
+
+
+def test_malformed_unmatched_record_is_rejected():
+    labels = _labels(
+        (D, "core::ptr::drop_in_place<T>", DIRECT_FLIRT), discovered=(A, B, C)
+    )
+    del labels["unmatched_addresses"][0]["reason"]
+    try:
+        direct_seeds(labels)
+    except LabelArtifactError as exc:
+        assert "unmatched_addresses" in str(exc)
+    else:
+        raise AssertionError("malformed unmatched record was accepted")
 
 
 def test_the_normalizer_matches_the_frozen_one() -> str:
@@ -359,6 +452,9 @@ def main() -> int:
     test_a_wrapper_or_cleanup_result_is_recorded_but_never_a_seed()
     test_a_hand_edited_seedable_flag_is_refused()
     test_a_match_with_no_discovered_function_is_kept_as_unmatched()
+    test_unmatched_direct_stays_in_baseline_and_preserves_mapped_address()
+    test_unmatched_inference_cannot_be_relabelled_as_direct()
+    test_malformed_unmatched_record_is_rejected()
     note = test_the_normalizer_matches_the_frozen_one()
     test_the_analysis_path_does_not_import_ground_truth()
     test_propagation_does_not_feed_back_into_the_earlier_stages()

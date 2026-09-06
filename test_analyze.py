@@ -20,7 +20,9 @@ import os
 import subprocess
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
+from unittest import mock
 
 import analyze
 
@@ -35,6 +37,110 @@ ALWAYS = (
     "discovery", "body", "universe", "relation",
     "candidates.consensus3", "candidates.consensus2",
 )
+
+
+def _fake_pipeline_patches(room: Path, *, budgeted: bool, seen: dict) -> ExitStack:
+    """Patch the expensive pipeline stages with a tiny deterministic run."""
+    import real_v1_adapter
+    import v1_component_budget
+    import v1_grouping
+    import v1_relaxed
+    import v1_rescue
+    import v1_retrieval
+
+    stage_names = ("discovery", "body", "universe", "relation")
+    source = mock.Mock(
+        binary_sha256="b" * 64,
+        stage_sha256={"body": "d" * 64, "discovery": "e" * 64},
+    )
+    original = {"artifact": "candidate", "pairs": [{"first": "a", "second": "b"}]}
+    derived = {"artifact": "candidate", "pairs": []}
+    queues = {
+        "multi": {"artifact": "multi", "pairs": []},
+        "consensus3": original,
+        "consensus2": {"artifact": "consensus2", "pairs": []},
+    }
+
+    def fake_callkin(argv: list[str]) -> int:
+        run_path = Path(argv[argv.index("--output") + 1])
+        artifacts = {}
+        for name in stage_names:
+            path = run_path.parent / f"{name}.json"
+            path.write_text("{}\n", encoding="utf-8")
+            artifacts[name] = {"path": path.name, "sha256": analyze._sha256(path)}
+        run = {
+            "binary": {"sha256": "b" * 64, "format": "ELF"},
+            "toolchain": {"python": "synthetic"},
+            "artifacts": artifacts,
+            "summary": {"grouping_role": {}},
+            "flirt": {"status": "skipped"},
+        }
+        run_path.write_text(json.dumps(run), encoding="utf-8")
+        return 0
+
+    def fake_write_candidates(items, output_dir, stem, *, top_k):
+        written = {}
+        for name, artifact in items.items():
+            path = output_dir / f"{stem}.{name}.json"
+            path.write_text(json.dumps(artifact, sort_keys=True), encoding="utf-8")
+            written[name] = {"path": str(path), "sha256": analyze._sha256(path)}
+        return written
+
+    def fake_budget(candidate_artifact, source_input, config, source_sha256):
+        seen["budget_args"] = (candidate_artifact, source_input, config, source_sha256)
+        return derived, {
+            "component_count": 3,
+            "selected_component_count": 1,
+            "deferred_component_count": 2,
+            "selected_member_count": 2,
+            "deferred_member_count": 3,
+            "selected_upper_bound_comparisons": 4,
+            "selected_upper_bound_alignment_cells": 5,
+            "deferred_upper_bound_comparisons": 6,
+            "deferred_upper_bound_alignment_cells": 7,
+            "max_comparison_count": 10,
+            "max_alignment_cell_budget": 500,
+            "within_budget": True,
+            "components": [{"members": ["a", "b"]}],
+            "selected_components": [{"members": ["a", "b"]}],
+            "deferred_components": [{"members": ["c"]}],
+        }
+
+    def fake_strict(queue, source_input, *, config, candidate_sha256):
+        seen["strict_queue"] = queue
+        seen["strict_sha256"] = candidate_sha256
+        families = {
+            "clusters": [],
+            "status_members": {"accepted": [], "abstain": []},
+            "blocked_merges": [],
+            "metrics": {},
+        }
+        return v1_grouping.COMPLETED, families, {"within_budget": True}
+
+    def fake_rescue(*args, **kwargs):
+        return {"summary": {"selected": 0}}
+
+    def fake_relaxed(*args, **kwargs):
+        return {"summary": {"selected": 0}}
+
+    stack = ExitStack()
+    stack.enter_context(mock.patch.object(analyze.callkin_real, "main", fake_callkin))
+    stack.enter_context(mock.patch.object(real_v1_adapter, "load_from_run", lambda _: source))
+    stack.enter_context(mock.patch.object(v1_retrieval, "build_candidate_artifacts", lambda *_a, **_k: queues))
+    stack.enter_context(mock.patch.object(v1_retrieval, "write_candidate_artifacts", fake_write_candidates))
+    stack.enter_context(mock.patch.object(v1_grouping, "build_strict_families", fake_strict))
+    stack.enter_context(mock.patch.object(v1_rescue, "discovery_payload_for", lambda _: {}))
+    stack.enter_context(mock.patch.object(v1_rescue, "build_rescue_artifact", fake_rescue))
+    stack.enter_context(mock.patch.object(v1_relaxed, "build_provisional_artifact", fake_relaxed))
+    if budgeted:
+        stack.enter_context(mock.patch.object(v1_component_budget, "build_budgeted_candidate_artifact", fake_budget))
+    else:
+        stack.enter_context(mock.patch.object(
+            v1_component_budget,
+            "build_budgeted_candidate_artifact",
+            mock.Mock(side_effect=AssertionError("budget derivation was not opt-in")),
+        ))
+    return stack
 
 
 def test_the_label_blind_artifact_list_is_the_one_the_spec_names():
@@ -148,10 +254,113 @@ def test_the_manifest_records_the_toolchain_and_the_command():
     assert manifest["binary"]["sha256"]
 
 
+def test_component_budgeted_v1_derives_and_feeds_the_strict_queue():
+    """The opt-in mode records its queue/costs and gives F6 that queue."""
+    with tempfile.TemporaryDirectory(prefix="callkin-budgeted-") as directory:
+        room = Path(directory)
+        seen: dict = {}
+        with _fake_pipeline_patches(room, budgeted=True, seen=seen):
+            manifest = analyze.analyze(
+                room / "input.bin", room / "out", case="synthetic",
+                no_flirt=True, component_budgeted_v1=True,
+            )
+
+        assert seen["strict_queue"]["pairs"] == []
+        assert seen["budget_args"][0]["pairs"] == [{"first": "a", "second": "b"}]
+        assert seen["strict_sha256"] == manifest["artifacts"][
+            "candidates.consensus3-budgeted"
+        ]["sha256"]
+        assert "candidates.consensus3-budgeted" in manifest["artifacts"]
+        assert "candidates.consensus3-budgeted" in manifest["label_blind_sha256"]
+        assert manifest["command"] == {
+            "no_flirt": True, "top_k": 16, "component_budgeted_v1": True,
+        }
+        budget_stage = next(
+            item for item in manifest["stages"]
+            if item["stage"] == "f5.component-budget"
+        )
+        assert budget_stage["status"] == "completed"
+        assert "cost" not in budget_stage
+        assert "components" not in budget_stage
+        assert budget_stage["budget"] == {
+            "component_count": 3,
+            "selected_component_count": 1,
+            "deferred_component_count": 2,
+            "selected_member_count": 2,
+            "deferred_member_count": 3,
+            "selected_upper_bound_comparisons": 4,
+            "selected_upper_bound_alignment_cells": 5,
+            "deferred_upper_bound_comparisons": 6,
+            "deferred_upper_bound_alignment_cells": 7,
+            "max_comparison_count": 10,
+            "max_alignment_cell_budget": 500,
+            "within_budget": True,
+        }
+
+
+def test_component_budgeted_v1_absent_preserves_the_original_queue_and_artifacts():
+    """The default path does not derive or expose an extra candidate queue."""
+    with tempfile.TemporaryDirectory(prefix="callkin-unbudgeted-") as directory:
+        room = Path(directory)
+        seen: dict = {}
+        with _fake_pipeline_patches(room, budgeted=False, seen=seen):
+            manifest = analyze.analyze(
+                room / "input.bin", room / "out", case="synthetic", no_flirt=True
+            )
+
+        assert seen["strict_queue"]["pairs"] == [{"first": "a", "second": "b"}]
+        assert "candidates.consensus3-budgeted" not in manifest["artifacts"]
+        assert "candidates.consensus3-budgeted" not in manifest["label_blind_sha256"]
+        assert manifest["command"] == {"no_flirt": True, "top_k": 16}
+        assert not any(item["stage"] == "f5.component-budget" for item in manifest["stages"])
+
+
+def test_component_budgeted_v1_is_a_cli_flag():
+    args = analyze.build_arg_parser().parse_args([
+        "binary", "--output-dir", "out", "--component-budgeted-v1",
+    ])
+    assert args.component_budgeted_v1 is True
+
+
+def test_verify_label_blind_rejects_optional_queue_presence_mismatch():
+    """The verifier must fail if only one run emits the opt-in queue."""
+    first = {
+        "case": "synthetic",
+        "artifacts": {},
+        "stages": [],
+        "execution": {"duration_seconds": 0},
+        "label_blind_sha256": {
+            "discovery": "d" * 64,
+            "candidates.consensus3-budgeted": "b" * 64,
+        },
+    }
+    second = {
+        **first,
+        "label_blind_sha256": {"discovery": "d" * 64},
+    }
+    calls: list[dict] = []
+
+    def fake_analyze(*args, **kwargs):
+        calls.append(kwargs)
+        return first if len(calls) == 1 else second
+
+    with mock.patch.object(analyze, "analyze", fake_analyze):
+        result = analyze.main([
+            "binary", "--output-dir", "out", "--component-budgeted-v1",
+            "--verify-label-blind",
+        ])
+    assert result == 1
+    assert [call["component_budgeted_v1"] for call in calls] == [True, True]
+
+
 def main() -> int:
     test_the_label_blind_artifact_list_is_the_one_the_spec_names()
     notes = [test_every_stage_is_recorded_even_when_it_does_nothing()]
     test_the_manifest_records_the_toolchain_and_the_command()
+    test_component_budgeted_v1_derives_and_feeds_the_strict_queue()
+    test_component_budgeted_v1_absent_preserves_the_original_queue_and_artifacts()
+    test_component_budgeted_v1_is_a_cli_flag()
+    test_verify_label_blind_rejects_optional_queue_presence_mismatch()
     notes.append(test_analyze_succeeds_with_ground_truth_unreadable())
     print("CallKin-Real analyze pipeline: PASS")
     for note in notes:
