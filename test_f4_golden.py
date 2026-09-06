@@ -18,6 +18,7 @@ from pathlib import Path
 
 from body_comparison import METRIC_NAMES, QUALITY_NAMES, score_pair
 from body_similarity import parse_body
+from frozen_reference import expected_hash
 
 # The frozen layout, because the frozen F7 control suite reads the same two
 # files from this path and a second copy could drift from the first.
@@ -93,14 +94,10 @@ def test_the_comparator_is_byte_identical_to_the_frozen_one():
     # is the guard -- but this says plainly that editing it is not the plan.
     import hashlib
 
-    frozen = Path(__file__).resolve().parent.parent / "v0-engine-py-f10" / "body_similarity.py"
-    if not frozen.is_file():
-        print("  (frozen V1 checkout absent; skipping the byte comparison)")
-        return
     here = Path(__file__).resolve().parent / "body_similarity.py"
     assert (
         hashlib.sha256(here.read_bytes()).hexdigest()
-        == hashlib.sha256(frozen.read_bytes()).hexdigest()
+        == expected_hash("body_similarity.py", root_file=True)
     ), "body_similarity.py diverged from the frozen V1"
 
 

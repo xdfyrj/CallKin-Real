@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import copy
+import os
 import tempfile
 from pathlib import Path
 
@@ -36,6 +37,133 @@ def test_oracle_metadata_may_omit_scope_but_not_conflict():
         assert "build" in str(exc)
     else:
         raise AssertionError("conflicting oracle build metadata was accepted")
+
+
+def _linkage_fixture():
+    binary = "a" * 64
+    ground_truth_sha = "b" * 64
+    run = {
+        "binary": {"sha256": binary},
+        "case": "fixture",
+        "build": "O3S",
+        "profile": "plain",
+    }
+    ground_truth = {
+        "symbols": {},
+        "origins": [{"origin": "fixture::same", "members": ["A", "B"]}],
+        "provenance": {"stripped_sha256": binary},
+    }
+    audit = {
+        "schema_version": 1,
+        "artifact": "v1-gt-mangled-audit",
+        "case": "fixture",
+        "build": "O3S",
+        "profile": "plain",
+        "provenance": {
+            "ground_truth_sha256": ground_truth_sha,
+            "stripped_sha256": binary,
+        },
+        "addresses": {
+            member: {
+                "identities": ["M1"],
+                "origins": ["fixture::same"],
+                "raw_symbols": [f"fixture::{member}"],
+            }
+            for member in ("A", "B")
+        },
+    }
+    return run, ground_truth, audit, ground_truth_sha
+
+
+def test_replay_neutral_scoring_validates_address_overlay_and_gt_universe():
+    import evaluate
+
+    run, ground_truth, audit, ground_truth_sha = _linkage_fixture()
+    with tempfile.TemporaryDirectory(prefix="callkin-replay-linkage-") as directory:
+        normalized, _, counts = replay._normalized_linkage(
+            audit,
+            {"A", "B", "C"},
+            Path(directory) / "linkage-pairs.json",
+            run=run,
+            ground_truth=ground_truth,
+            ground_truth_sha256=ground_truth_sha,
+        )
+
+    assert normalized["pairs"] == [
+        {"pair": ["A", "B"], "label": evaluate.DUPLICATE_NEUTRAL}
+    ]
+    assert counts[evaluate.DUPLICATE_NEUTRAL] == 1
+    report = replay.score_replay(
+        strict_groups=[["A", "B"]],
+        rescue_groups=[["A", "B"]],
+        strict_relaxed_groups=[["A", "B"]],
+        rescue_relaxed_groups=[["A", "B"]],
+        ground_truth=ground_truth,
+        universe={"A", "B"},
+        neutral={("A", "B"): evaluate.DUPLICATE_NEUTRAL},
+    )
+    assert report["strict"]["neutral_pair_total"] == 1
+    assert report["strict"]["true_positive"] == 0
+
+
+def test_replay_neutral_scoring_rejects_malformed_or_mismatched_audit():
+    import evaluate
+
+    run, ground_truth, audit, ground_truth_sha = _linkage_fixture()
+    with tempfile.TemporaryDirectory(prefix="callkin-replay-linkage-") as directory:
+        path = Path(directory) / "linkage-pairs.json"
+        malformed = json.loads(json.dumps(audit))
+        del malformed["addresses"]["A"]["raw_symbols"]
+        try:
+            replay._normalized_linkage(
+                malformed,
+                {"A", "B"},
+                path,
+                run=run,
+                ground_truth=ground_truth,
+                ground_truth_sha256=ground_truth_sha,
+            )
+        except evaluate.EvaluationError as exc:
+            assert "raw_symbols" in str(exc)
+        else:
+            raise AssertionError("malformed address record was accepted")
+
+        mismatched = json.loads(json.dumps(audit))
+        mismatched["provenance"]["ground_truth_sha256"] = "c" * 64
+        try:
+            replay._normalized_linkage(
+                mismatched,
+                {"A", "B"},
+                path,
+                run=run,
+                ground_truth=ground_truth,
+                ground_truth_sha256=ground_truth_sha,
+            )
+        except evaluate.EvaluationError as exc:
+            assert "ground_truth_sha256 mismatch" in str(exc)
+        else:
+            raise AssertionError("mismatched audit provenance was accepted")
+
+
+def test_formal_runtime_accepts_python_314_at_any_install_path():
+    original_version = replay.sys.version_info
+    original_executable = replay.sys.executable
+    try:
+        replay.sys.version_info = (3, 14, 7)
+        replay.sys.executable = "/opt/custom/python314/bin/python"
+        replay._require_formal_runtime()
+    finally:
+        replay.sys.version_info = original_version
+        replay.sys.executable = original_executable
+
+
+def test_replay_roots_accept_environment_overrides_without_user_paths():
+    roots = replay.replay_roots({
+        "CALLKIN_V1_INPUT_ROOT": "/data/f1",
+        "CALLKIN_FROZEN_INPUT_ROOT": "/data/frozen",
+        "CALLKIN_V0_INPUT_ROOT": "/data/v0",
+    })
+    assert roots == (Path("/data/f1"), Path("/data/frozen"), Path("/data/v0"))
 
 
 def test_replay_scores_prediction_only_after_it_is_built():
@@ -177,7 +305,9 @@ def test_crlf_rescue_uses_canonical_digest_for_f7_validation():
     ])
 
 
-def test_frozen_input_pins_match_and_drift_is_rejected():
+def test_frozen_input_pins_match_and_drift_is_rejected() -> str:
+    if os.environ.get("CALLKIN_CHECK_REPLAY_INPUTS") != "1":
+        return "  (replay input pin check skipped; set CALLKIN_CHECK_REPLAY_INPUTS=1)"
     for subject in replay.SUBJECTS.values():
         pins = replay.FROZEN_PINS[subject.name]
         for name in ("body", "candidates", "strict", "rescue", "ground_truth", "linkage_audit", "v0"):
@@ -193,6 +323,7 @@ def test_frozen_input_pins_match_and_drift_is_rejected():
         assert "pinned" in str(exc)
     else:
         raise AssertionError("a replaced V0 input was accepted by its pin")
+    return "  (replay input pins verified)"
 
 
 def test_budget_refusal_is_reported_before_prediction_execution():
@@ -525,12 +656,16 @@ def test_jointly_tampered_prediction_and_manifest_fail_before_oracle():
 if __name__ == "__main__":
     test_wsl_frozen_paths_translate_only_for_windows_runtime()
     test_oracle_metadata_may_omit_scope_but_not_conflict()
+    test_replay_neutral_scoring_validates_address_overlay_and_gt_universe()
+    test_replay_neutral_scoring_rejects_malformed_or_mismatched_audit()
+    test_formal_runtime_accepts_python_314_at_any_install_path()
+    test_replay_roots_accept_environment_overrides_without_user_paths()
     test_replay_scores_prediction_only_after_it_is_built()
     test_replay_builds_all_subject_predictions_before_scoring_any_subject()
     test_replay_rejects_manifest_changed_after_prediction_phase()
     test_micro_aggregate_sums_pair_counts_before_rounding()
     test_crlf_rescue_uses_canonical_digest_for_f7_validation()
-    test_frozen_input_pins_match_and_drift_is_rejected()
+    print(test_frozen_input_pins_match_and_drift_is_rejected())
     test_budget_refusal_is_reported_before_prediction_execution()
     test_direct_predict_subject_checks_formal_runtime_before_feature_work()
     test_stale_prediction_manifest_hash_is_rejected_before_scoring()

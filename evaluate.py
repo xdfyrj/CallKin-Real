@@ -548,29 +548,19 @@ def _neutral_label(
     return None
 
 
-def load_neutral_pairs(
-    path: Path | None,
+def neutral_pairs_from_audit(
+    data: Mapping[str, Any],
     *,
-    universe: set[str] | None = None,
-    run: Mapping[str, Any] | None = None,
-    ground_truth: Mapping[str, Any] | None = None,
-    ground_truth_sha256: str | None = None,
+    universe: set[str],
+    run: Mapping[str, Any],
+    ground_truth: Mapping[str, Any],
+    ground_truth_sha256: str,
 ) -> dict[tuple[str, str], str]:
-    """Derive neutral pair labels from the real address linkage overlay.
+    """Validate an address overlay and derive neutral pairs for one universe.
 
-    The old pair-list shortcut accepted labels without proving where they came
-    from.  A supplied audit must now be the frozen
-    ``v1-gt-mangled-audit`` artifact and must contain its ``addresses`` map.
-    Only address pairs whose *both* IDs are grouping members are considered;
-    addresses for abstained/context-only functions are ignored.
+    Only IDs present in both the grouping universe and ground truth are scored;
+    addresses for abstained/context-only or undescribed functions are ignored.
     """
-    if path is None:
-        return {}
-    if universe is None or run is None or ground_truth is None or ground_truth_sha256 is None:
-        raise EvaluationError(
-            "linkage audit validation requires run, ground truth and grouping universe"
-        )
-    data, _ = _read(path)
     if data.get("artifact") != "v1-gt-mangled-audit":
         raise EvaluationError(
             "linkage audit has no addresses overlay: expected "
@@ -635,6 +625,31 @@ def load_neutral_pairs(
         if label in NEUTRAL_LABELS:
             pairs[(left_id, right_id)] = label
     return pairs
+
+
+def load_neutral_pairs(
+    path: Path | None,
+    *,
+    universe: set[str] | None = None,
+    run: Mapping[str, Any] | None = None,
+    ground_truth: Mapping[str, Any] | None = None,
+    ground_truth_sha256: str | None = None,
+) -> dict[tuple[str, str], str]:
+    """Read and validate an address-overlay linkage audit from disk."""
+    if path is None:
+        return {}
+    if universe is None or run is None or ground_truth is None or ground_truth_sha256 is None:
+        raise EvaluationError(
+            "linkage audit validation requires run, ground truth and grouping universe"
+        )
+    data, _ = _read(path)
+    return neutral_pairs_from_audit(
+        data,
+        universe=universe,
+        run=run,
+        ground_truth=ground_truth,
+        ground_truth_sha256=ground_truth_sha256,
+    )
 
 
 def evaluate(

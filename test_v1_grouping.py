@@ -32,9 +32,9 @@ from v1_grouping import (
     summarize,
 )
 from v1_retrieval import DEFAULT_TOP_K, build_candidate_artifacts
+from frozen_reference import expected_hash
 
 HERE = Path(__file__).resolve().parent
-FROZEN_V1 = HERE.parent / "v0-engine-py-f10"
 COPIED = ("v1_engine.py", "configs/v1.formal.json")
 
 # Spec 10.5. Written out so a silent edit to the config file fails here rather
@@ -55,11 +55,9 @@ def _sha256(path: Path) -> str:
 
 
 def test_the_copied_f6_is_byte_identical_to_the_frozen_one() -> str:
-    if not FROZEN_V1.is_dir():
-        return "  (frozen V1 checkout absent; byte comparison skipped)"
     for name in COPIED:
-        here, there = HERE / "frozen_v1" / name, FROZEN_V1 / name
-        assert _sha256(here) == _sha256(there), f"{name} diverged from the frozen V1"
+        here = HERE / "frozen_v1" / name
+        assert _sha256(here) == expected_hash(name), f"{name} diverged from the frozen V1"
     return f"  ({len(COPIED)} F6 files byte-identical to the frozen V1)"
 
 

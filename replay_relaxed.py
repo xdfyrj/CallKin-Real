@@ -21,7 +21,6 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from itertools import combinations
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -72,9 +71,23 @@ def native_path(value: str | Path, *, os_name: str | None = None) -> Path:
     return Path(text)
 
 
-F1 = native_path("/mnt/c/users/sumyr/playground/REV/v0-engine-py-f1")
-FROZEN = native_path("/mnt/c/users/sumyr/playground/REV/v0-engine-py-frozen")
-V0 = native_path("/mnt/c/users/sumyr/playground/REV/v0-engine-py")
+def replay_roots(environ: Mapping[str, str] | None = None) -> tuple[Path, Path, Path]:
+    """Resolve replay input roots without embedding a developer checkout path."""
+    values = os.environ if environ is None else environ
+    default_base = Path(__file__).resolve().parent / "replay-data"
+
+    def root(variable: str, name: str) -> Path:
+        value = values.get(variable)
+        return native_path(value) if value else default_base / name
+
+    return (
+        root("CALLKIN_V1_INPUT_ROOT", "v0-engine-py-f1"),
+        root("CALLKIN_FROZEN_INPUT_ROOT", "v0-engine-py-frozen"),
+        root("CALLKIN_V0_INPUT_ROOT", "v0-engine-py"),
+    )
+
+
+F1, FROZEN, V0 = replay_roots()
 
 SUBJECTS: dict[str, Subject] = {
     "ripgrep-main": Subject(
@@ -368,44 +381,32 @@ def _load_v0_groups(
     return groups, {"path": str(path), "sha256": digest}
 
 
-def _linkage_label(
-    left: str, right: str, addresses: Mapping[str, Any],
-) -> str | None:
-    first, second = addresses.get(left), addresses.get(right)
-    if not isinstance(first, Mapping) or not isinstance(second, Mapping):
-        return evaluate.UNRESOLVED_NEUTRAL
-    first_ids = set(first.get("identities", ()))
-    second_ids = set(second.get("identities", ()))
-    first_origins = set(first.get("origins", ()))
-    second_origins = set(second.get("origins", ()))
-    if not first_ids or not second_ids or not first_origins or not second_origins:
-        return evaluate.UNRESOLVED_NEUTRAL
-    if len(first_origins) > 1 or len(second_origins) > 1:
-        return evaluate.AMBIGUOUS_NEUTRAL
-    if first_origins == second_origins and first_ids.intersection(second_ids):
-        return evaluate.DUPLICATE_NEUTRAL
-    return None
-
-
 def _normalized_linkage(
-    audit: Mapping[str, Any], universe: set[str], path: Path,
+    audit: Mapping[str, Any],
+    universe: set[str],
+    path: Path,
+    *,
+    run: Mapping[str, Any],
+    ground_truth: Mapping[str, Any],
+    ground_truth_sha256: str,
 ) -> tuple[dict[str, Any], str, dict[str, int]]:
-    """Convert the frozen address overlay to evaluate.py's pair-label schema."""
-    addresses = audit.get("addresses")
-    if not isinstance(addresses, Mapping):
-        raise ValueError("linkage audit has no addresses overlay")
-    pairs: list[dict[str, Any]] = []
+    """Validate an address overlay, then persist its neutral-pair view."""
+    neutral = evaluate.neutral_pairs_from_audit(
+        audit,
+        universe=universe,
+        run=run,
+        ground_truth=ground_truth,
+        ground_truth_sha256=ground_truth_sha256,
+    )
     counts = {
         evaluate.DUPLICATE_NEUTRAL: 0,
         evaluate.AMBIGUOUS_NEUTRAL: 0,
         evaluate.UNRESOLVED_NEUTRAL: 0,
     }
-    ordered = sorted(universe)
-    for left, right in combinations(ordered, 2):
-        label = _linkage_label(left, right, addresses)
-        if label is not None:
-            pairs.append({"pair": [left, right], "label": label})
-            counts[label] += 1
+    pairs = []
+    for pair, label in sorted(neutral.items()):
+        pairs.append({"pair": list(pair), "label": label})
+        counts[label] += 1
     normalized = {
         "schema_version": 1,
         "artifact": "replay-linkage-pairs",
@@ -745,8 +746,27 @@ def score_subject(
         raise ValueError("linkage audit was built from a different ground truth")
     universe = set((strict.get("universe") or {}).get("target_ids", []))
     normalized_path = output_root / subject.name / "linkage-pairs.json"
-    _, normalized_sha, neutral_counts = _normalized_linkage(linkage, universe, normalized_path)
-    neutral = evaluate.load_neutral_pairs(normalized_path)
+    run_context = {
+        "binary": {
+            "sha256": strict.get("provenance", {}).get("stripped_sha256")
+        },
+        **{
+            key: strict.get(key)
+            for key in ("case", "build", "profile")
+        },
+    }
+    normalized, normalized_sha, neutral_counts = _normalized_linkage(
+        linkage,
+        universe,
+        normalized_path,
+        run=run_context,
+        ground_truth=ground_truth,
+        ground_truth_sha256=gt_sha,
+    )
+    neutral = {
+        tuple(item["pair"]): item["label"]
+        for item in normalized["pairs"]
+    }
     metrics = score_replay(
         strict_groups=strict_groups, rescue_groups=rescue_groups,
         strict_relaxed_groups=relaxed_groups,
@@ -787,8 +807,7 @@ def score_subject(
 
 def _require_formal_runtime() -> None:
     version = sys.version_info[:3]
-    executable = str(sys.executable).replace("\\", "/").lower()
-    if version != FORMAL_VERSION or "python314" not in executable:
+    if version != FORMAL_VERSION:
         observed = ".".join(str(item) for item in version)
         required = ".".join(str(item) for item in FORMAL_VERSION)
         raise RuntimeError(

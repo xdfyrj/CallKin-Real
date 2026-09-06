@@ -28,9 +28,9 @@ from v1_retrieval import (
     build_candidate_artifacts,
     write_candidate_artifacts,
 )
+from frozen_reference import expected_hash
 
 HERE = Path(__file__).resolve().parent
-FROZEN_V1 = HERE.parent / "v0-engine-py-f10"
 COPIED = {
     "v1_candidates.py": "v1_candidates.py",
     "v1_retrieval_views.py": "v1_retrieval_views.py",
@@ -45,11 +45,9 @@ def _sha256(path: Path) -> str:
 
 
 def test_the_copied_f5_is_byte_identical_to_the_frozen_one() -> str:
-    if not FROZEN_V1.is_dir():
-        return "  (frozen V1 checkout absent; byte comparison skipped)"
     for local, frozen in COPIED.items():
-        here, there = HERE / "frozen_v1" / local, FROZEN_V1 / frozen
-        assert _sha256(here) == _sha256(there), f"{local} diverged from the frozen V1"
+        here = HERE / "frozen_v1" / local
+        assert _sha256(here) == expected_hash(local), f"{local} diverged from the frozen V1"
     return f"  ({len(COPIED)} F5 modules byte-identical to the frozen V1)"
 
 

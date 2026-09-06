@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "CallKin",
+    "commit": "0abd0911b1aaeff5a8dff99d69eea9153e41d218"
+  },
+  "frozen_v1": {
+    "files": {
+      "analysis/v1_consensus_candidates.py": {
+        "kind": "frozen",
+        "sha256": "359283d0dc295be401bf0912ee7ce9b8467593b3cb17ea9715e7dc99c5338b83"
+      },
+      "build_manifest.py": {
+        "kind": "stub",
+        "sha256": "6fe9318dc2df7b9639373b8a1f789a9560171061687400230448dbcfb019c847",
+        "source_sha256": "7ad7dbf1b9572578c6da4f62a89247be4b7fd65756b01b6630cdb3d12abb125d"
+      },
+      "configs/v1.formal.json": {
+        "kind": "frozen",
+        "sha256": "77f394244c67b6633698e80af5265da4544c8ad5033aff7d0474a5ff8f1eebfa"
+      },
+      "engine.py": {
+        "kind": "stub",
+        "sha256": "b975bbe6c2d9a0e2381dc315597285fac1ba2e4b12f30f8844073b3925673325",
+        "source_sha256": "f1d89dc1e1ec2541d62fa4f343ab0245b1032d5792f7f6421eaaed268fa04bb0"
+      },
+      "family_label_propagation.py": {
+        "kind": "frozen",
+        "sha256": "473101b8dfb0447b7627795c82df5adaea6618057175704a2ffbdcca3b969ec0"
+      },
+      "family_rescue.py": {
+        "kind": "frozen",
+        "sha256": "0521317d8d40cb2ff7d769b20e01e984b43be957b5c2c452211511ee5ec891d6"
+      },
+      "family_template.py": {
+        "kind": "frozen",
+        "sha256": "c7c4a2794ef5509052f99bc15927aceef2055c0e0ed19a99a58914c613813305"
+      },
+      "graph_projector.py": {
+        "kind": "stub",
+        "sha256": "ac323e2834cf5bdda79d0369f21dc736d42f5e65b52d44f6676abe43b535df0b",
+        "source_sha256": "c771ea5a4b456d684d6c409a21637bafa6c7b473af673d08b7ce2b126f1b67f6"
+      },
+      "loader.py": {
+        "kind": "stub",
+        "sha256": "b98d6f98ac65cdec9492f736456da9a9d9189129ddd539a8e744833461a3aa11",
+        "source_sha256": "3bb40ad7b0d10ce28b470f46ade860cb1f3036f0532b04bbd2e9004b684664f2"
+      },
+      "oxidizer_adapter.py": {
+        "kind": "stub",
+        "sha256": "0848243a01b8afca8ad10eced15357cb78136b2ef603fc88df2be98301f0a745",
+        "source_sha256": "b563e0f03ae39c9fe425ba7eebb23ac6e39f6a2efaa4f2982644ecf565acead7"
+      },
+      "paths.py": {
+        "kind": "frozen",
+        "sha256": "c50e1babac46d95223e64ca09fe2c84f28fba4caf56a196516c4b439e33710ef"
+      },
+      "slot_overlay.py": {
+        "kind": "frozen",
+        "sha256": "61d133605a22a6c1eb1f6bf1f94347ad791b0747e64f76993c4a26fcf3dafd1d"
+      },
+      "tests/fixtures/f7_alignment/make_fixture.py": {
+        "kind": "frozen",
+        "sha256": "149d04663688484dddc0324b18dc3704685c348982d53a8695dac98ed6580c3f"
+      },
+      "tests/fixtures/f7_alignment/ripgrep_219_bodies.json.gz": {
+        "kind": "frozen",
+        "sha256": "62ab7b38e1e7e0f7ca4489d0069b513e6ac137ac915841deea7b2bbdcc1de7e5"
+      },
+      "tests/fixtures/f7_alignment/ripgrep_556_scores.json": {
+        "kind": "frozen",
+        "sha256": "ea66e09b7e5cd5eb0f947e332c926950c121478f31c60874953fa2bc019970f1"
+      },
+      "tests/fixtures/f7_axis_control/expected.json": {
+        "kind": "frozen",
+        "sha256": "88d8c6594f5cd3f3197e4ce19d41803fe0b0c8bad9ab34f336f37b27deded0d4"
+      },
+      "tests/fixtures/f7_axis_control/expected_axis04.json": {
+        "kind": "frozen",
+        "sha256": "c8c4ed3677b3d9cc0c9fd2da22f18ed70a2e2b396941d33f6ee8f18e54929d62"
+      },
+      "tests/fixtures/f7_slot_overlay/make_fixture.py": {
+        "kind": "frozen",
+        "sha256": "d7bafb9ad1869a9132a18a458f8e79e0ceac9c352dac38b50c1798c35d095b22"
+      },
+      "tests/fixtures/f7_slot_overlay/ripgrep_positive_41.raw.json.gz": {
+        "kind": "frozen",
+        "sha256": "42fac2eaf9ff3fec7a560fb14adaffeb9969c233b5194e86f77ec346af92559f"
+      },
+      "tests/test_f7_alignment.py": {
+        "kind": "frozen",
+        "sha256": "720f2850524b47af3f1eabab3fa6b76d3589abb43b619fc20a5797d8efbcd162"
+      },
+      "tests/test_family_rescue.py": {
+        "kind": "frozen",
+        "sha256": "29096bd2cfd04aa13bed846e95ab4c485b36f198afb728730ec4ba1764251d51"
+      },
+      "tests/test_family_template.py": {
+        "kind": "frozen",
+        "sha256": "dc10fa99645e3c740721c9b3ef2f91ad1ad9f11d91d3e839bc4bf9b0abe42c9b"
+      },
+      "tests/test_slot_overlay.py": {
+        "kind": "frozen",
+        "sha256": "d64921336dbc6dbd9e3e44ce706b03347d47fa0943167b0d958355f56af2e5af"
+      },
+      "v1_candidates.py": {
+        "kind": "frozen",
+        "sha256": "300580df6cf4fa968b820aa2611c4197db15197932f7830738f6b5f962f66659"
+      },
+      "v1_engine.py": {
+        "kind": "frozen",
+        "sha256": "6e6c92a64d22c2a38e82078a99e29530f8fe6f7c08b8a0ad5e226d64297ef5b0"
+      },
+      "v1_retrieval_views.py": {
+        "kind": "frozen",
+        "sha256": "c833d5acaca969f319590701e7ca06ba6e9b415c4de79afd5bdb84f14c4a96ff"
+      }
+    }
+  },
+  "root_files": {
+    "files": {
+      "body_similarity.py": {
+        "kind": "frozen",
+        "sha256": "569f462255deea580387c799f43bfea357cdca90dd3369c7c7388bbfb0b278fb"
+      }
+    }
+  }
+}

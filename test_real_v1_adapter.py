@@ -6,8 +6,8 @@ so it is checked by content. Handing it a stale artifact is the same kind of
 failure, so the chain is checked by hash rather than by filename.
 
 The real-binary part runs when CALLKIN_REAL_TEST_BINARY is set. The last test
-runs only when the frozen V1 checkout is beside this one, because what it
-proves is that the reshaped relation is the shape that module actually takes.
+proves that the bundled, byte-verified frozen relation view accepts the shape
+the adapter produces.
 """
 
 from __future__ import annotations
@@ -27,9 +27,6 @@ from real_v1_adapter import (
     load_real_v1_input,
     relation_context,
 )
-
-FROZEN_V1 = Path(__file__).resolve().parent.parent / "v0-engine-py-f10"
-
 
 def _write(directory: Path, stage: str, payload, inputs, binary="a" * 64) -> Path:
     path = directory / f"{stage}.json"
@@ -315,13 +312,15 @@ def test_the_relation_reshape_keeps_only_what_1_wl_saw():
 
 
 def test_the_reshaped_relation_is_the_shape_the_frozen_view_takes() -> str:
-    if not (FROZEN_V1 / "v1_retrieval_views.py").is_file():
-        return "  (frozen V1 checkout absent; relation view shape unchecked)"
-    sys.path.insert(0, str(FROZEN_V1))
+    from frozen_reference import verify_file
+
+    frozen_dir = Path(__file__).resolve().parent / "frozen_v1"
+    verify_file(frozen_dir / "v1_retrieval_views.py", "v1_retrieval_views.py")
+    sys.path.insert(0, str(frozen_dir))
     try:
         from v1_retrieval_views import build_relation_profiles
     finally:
-        sys.path.remove(str(FROZEN_V1))
+        sys.path.remove(str(frozen_dir))
 
     relation = relation_context(_relation_payload())
     profiles = build_relation_profiles(
@@ -341,7 +340,7 @@ def test_the_reshaped_relation_is_the_shape_the_frozen_view_takes() -> str:
     first, second = profiles["FUN_00101000"], profiles["FUN_00102000"]
     assert first.final_group == second.final_group
     assert first.history != second.history
-    return "  (frozen relation view accepted the reshape)"
+    return "  (bundled frozen relation view accepted the reshape)"
 
 
 def test_a_real_run_loads_end_to_end() -> str:

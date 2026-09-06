@@ -35,9 +35,9 @@ from v1_rescue import (
     raw_graph_view,
 )
 from v1_retrieval import DEFAULT_TOP_K, build_candidate_artifacts
+from frozen_reference import expected_hash
 
 HERE = Path(__file__).resolve().parent
-FROZEN_V1 = HERE.parent / "v0-engine-py-f10"
 COPIED = (
     "family_rescue.py",
     "family_template.py",
@@ -59,11 +59,8 @@ def _sha256(path: Path) -> str:
 
 
 def test_the_copied_f7_is_byte_identical_to_the_frozen_one() -> str:
-    if not FROZEN_V1.is_dir():
-        return "  (frozen V1 checkout absent; byte comparison skipped)"
     for name in COPIED:
-        frozen = FROZEN_V1 / name
-        assert _sha256(HERE / "frozen_v1" / name) == _sha256(frozen), name
+        assert _sha256(HERE / "frozen_v1" / name) == expected_hash(name), name
     return f"  ({len(COPIED)} F7 files byte-identical to the frozen V1)"
 
 

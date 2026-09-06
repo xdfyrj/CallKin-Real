@@ -15,9 +15,10 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from frozen_reference import expected_hash, load_manifest
+
 HERE = Path(__file__).resolve().parent
 FROZEN_DIR = HERE / "frozen_v1"
-FROZEN_V1 = HERE.parent / "v0-engine-py-f10"
 
 # Written on purpose, and why. Each replaces a module the frozen code imports
 # at module scope but CallKin-Real must never call.
@@ -45,37 +46,46 @@ def _inventory() -> list[Path]:
     )
 
 
-def test_every_file_is_frozen_or_a_declared_stub() -> str:
-    if not FROZEN_V1.is_dir():
-        return "  (frozen V1 checkout absent; inventory unchecked)"
+def test_reference_manifest_covers_the_exact_callkin_inventory():
+    manifest = load_manifest()
+    entries = manifest["frozen_v1"]["files"]
+    assert set(entries) == {path.as_posix() for path in _inventory()}
+    assert sum(item["kind"] == "frozen" for item in entries.values()) == 21
+    assert sum(item["kind"] == "stub" for item in entries.values()) == 5
+    assert expected_hash("body_similarity.py", root_file=True)
 
-    identical, stubs, drifted, unaccounted = [], [], [], []
+
+def test_every_file_is_frozen_or_a_declared_stub() -> str:
+    manifest = load_manifest()
+    entries = manifest["frozen_v1"]["files"]
+    actual_names = {path.as_posix() for path in _inventory()}
+    expected_names = set(entries)
+    if actual_names != expected_names:
+        missing = sorted(expected_names - actual_names)
+        extra = sorted(actual_names - expected_names)
+        raise AssertionError(
+            f"frozen_v1 inventory mismatch: missing={missing}, extra={extra}"
+        )
+
+    identical, stubs, drifted = [], [], []
     for relative in _inventory():
         name = relative.as_posix()
         here = FROZEN_DIR / relative
-        there = FROZEN_V1 / relative
-        if name in STUBS:
+        entry = entries[name]
+        if entry["kind"] == "stub":
             stubs.append(name)
-            # A stub must not be a copy: if it were, the oracle path would be
-            # available again and nothing would say so.
-            if there.is_file() and _sha256(here) == _sha256(there):
-                drifted.append(f"{name} is the real module, not a stub")
-            continue
-        if not there.is_file():
-            unaccounted.append(name)
-        elif _sha256(here) != _sha256(there):
-            drifted.append(f"{name} differs from the frozen V1")
-        else:
+        if _sha256(here) != entry["sha256"]:
+            drifted.append(f"{name} differs from the CallKin reference")
+        elif entry["kind"] == "frozen":
             identical.append(name)
 
     if drifted:
         raise AssertionError("frozen_v1 has drifted:\n  " + "\n  ".join(drifted))
-    if unaccounted:
-        raise AssertionError(
-            "frozen_v1 holds files that are neither frozen nor declared stubs:\n  "
-            + "\n  ".join(unaccounted)
-        )
     assert sorted(stubs) == sorted(STUBS), sorted(stubs)
+    if _sha256(HERE / "body_similarity.py") != expected_hash(
+        "body_similarity.py", root_file=True
+    ):
+        raise AssertionError("body_similarity.py differs from the CallKin reference")
     return f"  ({len(identical)} frozen files, {len(stubs)} declared stubs)"
 
 
@@ -91,6 +101,7 @@ def test_each_stub_says_why_it_refuses():
 
 
 def main() -> int:
+    test_reference_manifest_covers_the_exact_callkin_inventory()
     note = test_every_file_is_frozen_or_a_declared_stub()
     test_each_stub_says_why_it_refuses()
     print("CallKin-Real frozen inventory: PASS")

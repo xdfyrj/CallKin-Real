@@ -40,7 +40,6 @@ from flirt_labels import (
 from label_propagation import build_propagation, summarize
 
 HERE = Path(__file__).resolve().parent
-FROZEN_V1 = HERE.parent / "v0-engine-py-f10"
 BINARY = "a" * 64
 A, B, C, D = 0x1000, 0x2000, 0x3000, 0x4000
 IDS = {address: callkin_real.function_id(address) for address in (A, B, C, D)}
@@ -357,48 +356,52 @@ def test_malformed_unmatched_record_is_rejected():
 
 
 def test_the_normalizer_matches_the_frozen_one() -> str:
-    """Differential check against `gt_extractor`, which must not be imported.
-
-    The normalizer decides which seeds agree, so a difference here changes what
-    propagates. The frozen module is imported only by this test, never by the
-    analysis path.
-    """
-    if not (FROZEN_V1 / "gt_extractor.py").is_file():
-        return "  (frozen V1 checkout absent; normalizer unchecked)"
-    sys.path.insert(0, str(FROZEN_V1))
-    try:
-        import gt_extractor
-    finally:
-        sys.path.remove(str(FROZEN_V1))
-
-    names = [
-        "core::ptr::drop_in_place<alloc::string::String>",
-        "core::ptr::drop_in_place<T>::h0123456789abcdef",
-        "<alloc::vec::Vec<T,A> as core::ops::drop::Drop>::drop",
-        "<ripgrep::Foo as core::fmt::Debug>::fmt",
-        "std::io::Write::write_fmt::h0123456789abcdef",
-        "alloc::raw_vec::RawVec<T,A>::grow_amortized",
-        "core::iter::adapters::map::Map<I,F>::next::<u8>",
-        "no_colons_here",
-        "<T as U>::f",
-        "__rustc::__rust_alloc",
-    ]
-    # Any label artifact lying around widens the comparison for free.
-    for path in sorted(FROZEN_V1.glob("results/**/*labels*.json"))[:2]:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        for match in data.get("matches", [])[:2000]:
-            if isinstance(match, dict) and isinstance(match.get("name"), str):
-                names.append(match["name"])
-
-    for name in names:
-        assert normalize_name(name) == {
-            "canonical_origin": gt_extractor.normalize_all_rust_origin(name),
-            "owner": gt_extractor.rust_symbol_owner(name) or "unknown",
-        }, name
-    return f"  (normalizer matches gt_extractor on {len(names)} names)"
+    """Check pinned normalization vectors generated from CallKin 0abd091."""
+    expected = {
+        "core::ptr::drop_in_place<alloc::string::String>": {
+            "canonical_origin": "core::ptr::drop_in_place",
+            "owner": "core",
+        },
+        "core::ptr::drop_in_place<T>::h0123456789abcdef": {
+            "canonical_origin": "core::ptr::drop_in_place",
+            "owner": "core",
+        },
+        "<alloc::vec::Vec<T,A> as core::ops::drop::Drop>::drop": {
+            "canonical_origin": "<alloc::vec::Vec as core::ops::drop::Drop>::drop",
+            "owner": "alloc",
+        },
+        "<ripgrep::Foo as core::fmt::Debug>::fmt": {
+            "canonical_origin": "<ripgrep::Foo as core::fmt::Debug>::fmt",
+            "owner": "ripgrep",
+        },
+        "std::io::Write::write_fmt::h0123456789abcdef": {
+            "canonical_origin": "std::io::Write::write_fmt",
+            "owner": "std",
+        },
+        "alloc::raw_vec::RawVec<T,A>::grow_amortized": {
+            "canonical_origin": "alloc::raw_vec::RawVec::grow_amortized",
+            "owner": "alloc",
+        },
+        "core::iter::adapters::map::Map<I,F>::next::<u8>": {
+            "canonical_origin": "core::iter::adapters::map::Map::next",
+            "owner": "core",
+        },
+        "no_colons_here": {
+            "canonical_origin": "no_colons_here",
+            "owner": "unknown",
+        },
+        "<T as U>::f": {
+            "canonical_origin": "<T as U>::f",
+            "owner": "unknown",
+        },
+        "__rustc::__rust_alloc": {
+            "canonical_origin": "__rustc::__rust_alloc",
+            "owner": "__rustc",
+        },
+    }
+    for name, value in expected.items():
+        assert normalize_name(name) == value, name
+    return f"  (normalizer matches pinned vectors on {len(expected)} names)"
 
 
 def test_the_analysis_path_does_not_import_ground_truth():
