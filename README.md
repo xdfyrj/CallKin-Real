@@ -157,10 +157,10 @@ by a long tail.
 ## Oxidizer
 
 FLIRT runs in its own Python environment; CallKin-Real receives JSON and never
-imports Oxidizer's angr fork. It is expected at
-`/mnt/c/Users/sumyr/playground/oxidizer` on WSL or
-`C:/Users/sumyr/playground/oxidizer` on Windows, and `--oxidizer-dir`
-overrides it. Prepare its environment once:
+imports Oxidizer's angr fork. By default it looks for a sibling `oxidizer/`
+checkout. Set `CALLKIN_OXIDIZER_DIR=/path/to/oxidizer` when using another
+location (the lower-level `callkin_real.py` also accepts `--oxidizer-dir`).
+Prepare the separate Oxidizer environment once, from its checkout:
 
 ```bash
 uv sync --frozen --no-default-groups

@@ -6,8 +6,8 @@ ground-truth or linkage audit is opened.  The relaxed builder receives only
 the frozen body, candidate, strict-family and rescue artifacts.  Evaluation is
 the separate step below, and delegates pair scoring to :mod:`evaluate`.
 
-The command-line replay must run under ``C:/Python314/python.exe`` (Python
-3.14.7).  Importing this module is intentionally safe under the development
+The command-line replay requires CPython 3.14.7, with no restriction on its
+installation path. Importing this module is intentionally safe under the development
 interpreter so the small evaluator tests do not accidentally perform a frozen
 pair comparison.
 """
@@ -39,7 +39,7 @@ from v1_relaxed import (
 
 
 FORMAL_VERSION = (3, 14, 7)
-FORMAL_RUNTIME_DISPLAY = "C:/Python314/python.exe"
+FORMAL_RUNTIME_DISPLAY = "CPython 3.14.7"
 MAX_COMPARISONS = 10_000
 MAX_ALIGNMENT_CELLS = 500_000_000
 RESULTS_ROOT = Path(__file__).resolve().parent / "results" / "replay-relaxed-v1"
@@ -811,7 +811,7 @@ def _require_formal_runtime() -> None:
         observed = ".".join(str(item) for item in version)
         required = ".".join(str(item) for item in FORMAL_VERSION)
         raise RuntimeError(
-            f"frozen pair decisions require {FORMAL_RUNTIME_DISPLAY} Python {required}; "
+            f"frozen pair decisions require CPython {required}; "
             f"this process is Python {observed} ({sys.executable})"
         )
 

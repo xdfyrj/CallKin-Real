@@ -1,4 +1,9 @@
+import os
+from pathlib import Path
+from unittest.mock import patch
+
 from callkin_real import (
+    default_oxidizer_dir,
     Function,
     Transfer,
     apply_angr_resolutions,
@@ -9,6 +14,10 @@ from callkin_real import (
 
 
 def main() -> None:
+    with patch.dict(os.environ, {}, clear=True):
+        assert default_oxidizer_dir() == Path(__file__).resolve().parent.parent / "oxidizer"
+    with patch.dict(os.environ, {"CALLKIN_OXIDIZER_DIR": "/custom/oxidizer"}, clear=True):
+        assert default_oxidizer_dir() == Path("/custom/oxidizer")
     assert function_id(0x1000) == "FUN_00101000"
     functions = {
         0x1000: Function(0x1000, 10, "entry", "test"),

@@ -916,18 +916,12 @@ def apply_angr_resolutions(
 
 
 def default_oxidizer_dir() -> Path:
-    """Oxidizer lives on the same disk under either name, depending on the OS.
-
-    A WSL-only default silently turns "FLIRT ran and found nothing" into "FLIRT
-    could not start", which is the one distinction the label stage must keep.
-    """
-    for candidate in (
-        Path("/mnt/c/Users/sumyr/playground/oxidizer"),
-        Path("C:/Users/sumyr/playground/oxidizer"),
-    ):
-        if candidate.is_dir():
-            return candidate
-    return Path("oxidizer")
+    """Use an explicit environment path or a sibling Oxidizer checkout."""
+    override = os.environ.get("CALLKIN_OXIDIZER_DIR")
+    return (
+        Path(override).expanduser()
+        if override else Path(__file__).resolve().parent.parent / "oxidizer"
+    )
 
 
 def run_flirt(
