@@ -1,0 +1,80 @@
+{
+  "artifact": "lazy-nonmatch-measurement",
+  "certificate": {
+    "certified_nonmatch_pair_count": 738,
+    "certified_pair_share_of_eligible": 0.08425619362940975,
+    "uncertified_expensive_pair_count": 8021
+  },
+  "cost_proxy": {
+    "certified_cell_max": 3030112,
+    "certified_cell_median": 1295.0,
+    "certified_cell_share": 0.7329797501052445,
+    "certified_nonmatch_instruction_product": 18940078,
+    "eligible_cell_max": 3030112,
+    "eligible_cell_median": 1,
+    "eligible_cell_top10_share": 0.41990514801215084,
+    "eligible_cell_top50_share": 0.6914840565176917,
+    "eligible_instruction_product": 25839838,
+    "eligible_required_alignment_cells": 25839838,
+    "eligible_required_comparisons": 8759,
+    "name": "normalized_instruction_count_product",
+    "opaque_instruction_product": 15066570736,
+    "queue_body_cell_max_including_opaque": 1257569953,
+    "queue_body_cell_top10_share_including_opaque": 0.638155023597889,
+    "queue_body_instruction_product_including_opaque": 15092410574,
+    "uncertified_cell_max": 629642,
+    "uncertified_cell_median": 1,
+    "uncertified_cell_share": 0.26702024989475553,
+    "uncertified_instruction_product": 6899760
+  },
+  "inputs": {
+    "binary_sha256": "3c07eb724eefb1bc5052c3cdf3e8597f9c51eb42a9b09b86265d9994bc8bbf83",
+    "body": {
+      "path": "/mnt/c/Users/sumyr/playground/REV/CallKin-Real/worktrees/CallKin-Real-formal-zoxide/results/formal-zoxide-2026-08-31/run.body.json",
+      "sha256": "de5b5409110c9a99c4039603f62446b07a94e04ab894acf33bf52adf77cf4805"
+    },
+    "candidate_queue": {
+      "path": "/mnt/c/Users/sumyr/playground/REV/CallKin-Real/worktrees/CallKin-Real-formal-zoxide/results/formal-zoxide-2026-08-31/run.v1.consensus3.k16.candidates.json",
+      "sha256": "077c1cfbf22b7e82c13c1703a77e17d1f3bec4b82ef2356a421969fe01837161"
+    },
+    "config": {
+      "path": "frozen_v1/configs/v1.formal.json",
+      "sha256": "77f394244c67b6633698e80af5265da4544c8ad5033aff7d0474a5ff8f1eebfa"
+    },
+    "run": {
+      "path": "/mnt/c/Users/sumyr/playground/REV/CallKin-Real/worktrees/CallKin-Real-formal-zoxide/results/formal-zoxide-2026-08-31/run.json",
+      "sha256": "1395938b69d55b4fb416dfeb0d56cddc441c9f7a2984dc13cbb96b148a8f17d7"
+    }
+  },
+  "method": {
+    "certificate": "multiset_jaccard < threshold proves F6 MATCH impossible",
+    "decision_equality": "not_checked",
+    "mnemonic_field": "normalized_instructions[*].mnemonic_class",
+    "name": "actual_normalized_mnemonic_counter",
+    "partition_equality": "not_checked",
+    "proof_scope": "theoretical_nonmatch_only",
+    "threshold": 0.95
+  },
+  "queue": {
+    "duplicate_pair_count": 0,
+    "eligible_expensive_pair_count": 8759,
+    "excluded_breakdown": {
+      "opaque_indirect_jump": 1274
+    },
+    "excluded_pair_count": 1274,
+    "pair_count": 10033,
+    "source_comparable_count": 5335,
+    "source_member_count": 5335,
+    "target_count": 5335,
+    "unique_pair_count": 10033
+  },
+  "resource": {
+    "elapsed_seconds": 23.37,
+    "max_rss_kib": 4604800
+  },
+  "schema_version": 1,
+  "toolchain": {
+    "platform": "Linux-6.6.114.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "python": "3.12.3"
+  }
+}

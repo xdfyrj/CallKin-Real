@@ -1,0 +1,24 @@
+{
+  "binary_sha256": "3c07eb724eefb1bc5052c3cdf3e8597f9c51eb42a9b09b86265d9994bc8bbf83",
+  "body_sha256": "de5b5409110c9a99c4039603f62446b07a94e04ab894acf33bf52adf77cf4805",
+  "certified_seed_instruction_product": 2,
+  "original_candidate_sha256": "077c1cfbf22b7e82c13c1703a77e17d1f3bec4b82ef2356a421969fe01837161",
+  "pair_upper_bound": 2016,
+  "requested_count": 64,
+  "seed_pair": [
+    "FUN_0015aba6",
+    "FUN_001ca7d4"
+  ],
+  "selected_count": 64,
+  "selected_ids_sha256": "5677e76151c5250416c63e49d3b66e6b1ac4a059acbe0f9092be3aaf4ebf48c2",
+  "selection": "cheapest actual normalized nonmatch pair by instruction-product then pair; BFS over its candidate component to 62 nodes, then fill to requested count",
+  "subset_candidate_sha256": "eb2f1bd593aed0348d8b5c0c1781c8e24792f4758eaa9b875240a96e636575ec",
+  "subset_pair_count": 878,
+  "validation_subset": {
+    "original_candidate_queue_sha256": "077c1cfbf22b7e82c13c1703a77e17d1f3bec4b82ef2356a421969fe01837161",
+    "selection_rule": "cheapest actual normalized nonmatch pair by instruction-product then pair; BFS over its candidate component to 62 nodes, then fill to requested count",
+    "requested_count": 64,
+    "selected_count": 64,
+    "selected_ids_sha256": "5677e76151c5250416c63e49d3b66e6b1ac4a059acbe0f9092be3aaf4ebf48c2"
+  }
+}

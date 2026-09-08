@@ -1,0 +1,126 @@
+{
+  "artifact": "lazy-nonmatch-comparison",
+  "candidate_queue_decision_equality": {
+    "difference_count": 0,
+    "eager_decision_count": 878,
+    "equal": true,
+    "examples": [],
+    "lazy_decision_count": 878,
+    "pair_count": 878
+  },
+  "common_evaluated_pair_equality": {
+    "decision_difference_count": 0,
+    "decision_equal": true,
+    "decision_examples": [],
+    "match_feature_difference_count": 0,
+    "match_feature_examples": [],
+    "match_features_equal": true,
+    "match_pair_count": 1953,
+    "pair_count": 1959
+  },
+  "inputs": {
+    "candidate_queue": {
+      "path": "experiments/lazy-nonmatch-2026-09-09/results/subset-64-cert.candidates.json",
+      "sha256": "eb2f1bd593aed0348d8b5c0c1781c8e24792f4758eaa9b875240a96e636575ec"
+    },
+    "eager_families": {
+      "path": "experiments/lazy-nonmatch-2026-09-09/results/eager-f6-subset64-cert.json",
+      "sha256": "c76bd9124cd4ed4ba9841bf36ab7bf91627fd6ddcebc78a9e4586e4fcd552a9c"
+    },
+    "lazy_families": {
+      "path": "experiments/lazy-nonmatch-2026-09-09/results/lazy-f6-subset64-cert.json",
+      "sha256": "4f0f0717556e015e075ccde26d361adc7d7156711737be97764c9120248d7da1"
+    }
+  },
+  "interpretation": "candidate tri-state decisions equal; final partitions equal",
+  "metrics": {
+    "eager": {
+      "abstain_comparison_count": 0,
+      "budget_blocked_merge_count": 0,
+      "budget_limited": false,
+      "cache_hit_count": 872,
+      "candidate_alignment_cells": 884,
+      "candidate_detailed_comparison_count": 878,
+      "on_demand_alignment_cells": 1081,
+      "on_demand_comparison_count": 1081,
+      "remaining_alignment_cells": 499998035,
+      "remaining_comparisons": 8041,
+      "total_alignment_cells": 1965,
+      "total_detailed_comparisons": 1959
+    },
+    "lazy": {
+      "abstain_comparison_count": 0,
+      "accounting_mode": "lazy-nonmatch",
+      "budget_blocked_merge_count": 0,
+      "budget_limited": false,
+      "cache_hit_count": 878,
+      "candidate_alignment_cells": 872,
+      "candidate_detailed_comparison_count": 872,
+      "cheap_check_count": 1959,
+      "cheap_nonmatch_count": 6,
+      "on_demand_alignment_cells": 1081,
+      "on_demand_comparison_count": 1081,
+      "remaining_alignment_cells": 499998047,
+      "remaining_comparisons": 8047,
+      "total_alignment_cells": 1953,
+      "total_detailed_comparisons": 1953
+    }
+  },
+  "partition_equality": {
+    "accepted_family_sets_equal": true,
+    "eager_accepted_family_count": 1,
+    "eager_accepted_member_count": 63,
+    "eager_only_accepted_member_count": 0,
+    "eager_only_family_count": 0,
+    "lazy_accepted_family_count": 1,
+    "lazy_accepted_member_count": 63,
+    "lazy_only_accepted_member_count": 0,
+    "lazy_only_family_count": 0,
+    "status_members_equal": true
+  },
+  "resource": {
+    "address_space_limit_bytes": 12884901888,
+    "completion_checked": true,
+    "eager_f6_status": "completed",
+    "eager_status": "artifact_completed",
+    "lazy_f6_status": "completed",
+    "lazy_status": "artifact_completed",
+    "measured_runs": {
+      "address_space_limit_bytes": 12884901888,
+      "code_sha256_at_run": {
+        "frozen_v1/v1_engine.py": "2d96893ca22dbc3a715d1fc1fa411a2b35fafe587cad652a084a8defab5f9886",
+        "real_v1_adapter.py": "e99b39145959f2ca8ee0aa4c6bb32c65b62f0dc5dfaa45bf36bbac379f69adb0",
+        "v1_grouping.py": "49369a2f0766be0c5a1664bf58709a7f1168c606ebecaade8bef10d06394cf6a"
+      },
+      "eager": {
+        "elapsed_seconds": 15.62,
+        "family_output": "results/eager-f6-subset64-cert.json",
+        "family_output_sha256": "c76bd9124cd4ed4ba9841bf36ab7bf91627fd6ddcebc78a9e4586e4fcd552a9c",
+        "max_rss_kib": 4604780,
+        "system_seconds": 3.28,
+        "user_seconds": 7.84
+      },
+      "f6_status": {
+        "eager": "completed",
+        "lazy": "completed"
+      },
+      "formal_config_sha256": "77f394244c67b6633698e80af5265da4544c8ad5033aff7d0474a5ff8f1eebfa",
+      "input_binary_sha256": "3c07eb724eefb1bc5052c3cdf3e8597f9c51eb42a9b09b86265d9994bc8bbf83",
+      "input_body_sha256": "de5b5409110c9a99c4039603f62446b07a94e04ab894acf33bf52adf77cf4805",
+      "lazy": {
+        "elapsed_seconds": 16.1,
+        "family_output": "results/lazy-f6-subset64-cert.json",
+        "family_output_sha256": "4f0f0717556e015e075ccde26d361adc7d7156711737be97764c9120248d7da1",
+        "max_rss_kib": 4604544,
+        "system_seconds": 3.3,
+        "user_seconds": 8.16
+      },
+      "mode": "bounded-real-semantic-equivalence-with-certificate",
+      "selection_metadata": "results/subset-64-cert.metadata.json",
+      "subset_candidate_sha256": "eb2f1bd593aed0348d8b5c0c1781c8e24792f4758eaa9b875240a96e636575ec",
+      "timeout_seconds": 600
+    },
+    "timeout_seconds": 600
+  },
+  "schema_version": 1
+}

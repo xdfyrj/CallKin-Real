@@ -16,3 +16,25 @@ results/
 
 # Retained small reports are published; run caches remain ignored.
 !docs/results/
+
+# Retain the compact lazy-nonmatch evidence and deterministic gzip outputs.
+!experiments/
+!experiments/lazy-nonmatch-2026-09-09/
+!experiments/lazy-nonmatch-2026-09-09/REPORT.ko.md
+!experiments/lazy-nonmatch-2026-09-09/scripts/
+!experiments/lazy-nonmatch-2026-09-09/scripts/measure.py
+!experiments/lazy-nonmatch-2026-09-09/scripts/make_subset.py
+!experiments/lazy-nonmatch-2026-09-09/scripts/config.f6-compare-50k.json
+!experiments/lazy-nonmatch-2026-09-09/results/
+experiments/lazy-nonmatch-2026-09-09/results/*
+!experiments/lazy-nonmatch-2026-09-09/results/baseline-v2.json
+!experiments/lazy-nonmatch-2026-09-09/results/comparison-10k-final.json
+!experiments/lazy-nonmatch-2026-09-09/results/comparison-subset64-cert.json
+!experiments/lazy-nonmatch-2026-09-09/results/f6-10k-final.resources.json
+!experiments/lazy-nonmatch-2026-09-09/results/f6-subset64-cert.resources.json
+!experiments/lazy-nonmatch-2026-09-09/results/subset-64-cert.metadata.json
+!experiments/lazy-nonmatch-2026-09-09/results/subset-64-cert.candidates.json
+!experiments/lazy-nonmatch-2026-09-09/results/eager-f6-10k-final.json.gz
+!experiments/lazy-nonmatch-2026-09-09/results/lazy-f6-10k-final.json.gz
+!experiments/lazy-nonmatch-2026-09-09/results/eager-f6-subset64-cert.json.gz
+!experiments/lazy-nonmatch-2026-09-09/results/lazy-f6-subset64-cert.json.gz

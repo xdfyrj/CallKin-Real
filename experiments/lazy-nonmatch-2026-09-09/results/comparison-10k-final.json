@@ -1,0 +1,123 @@
+{
+  "artifact": "lazy-nonmatch-comparison",
+  "candidate_queue_decision_equality": {
+    "difference_count": 0,
+    "eager_decision_count": 10033,
+    "equal": true,
+    "examples": [],
+    "lazy_decision_count": 10033,
+    "pair_count": 10033
+  },
+  "common_evaluated_pair_equality": {
+    "decision_difference_count": 0,
+    "decision_equal": true,
+    "decision_examples": [],
+    "match_feature_difference_count": 0,
+    "match_feature_examples": [],
+    "match_features_equal": true,
+    "match_pair_count": 7054,
+    "pair_count": 11274
+  },
+  "inputs": {
+    "candidate_queue": {
+      "path": "/mnt/c/Users/sumyr/playground/REV/CallKin-Real/worktrees/CallKin-Real-formal-zoxide/results/formal-zoxide-2026-08-31/run.v1.consensus3.k16.candidates.json",
+      "sha256": "077c1cfbf22b7e82c13c1703a77e17d1f3bec4b82ef2356a421969fe01837161"
+    },
+    "eager_families": {
+      "path": "experiments/lazy-nonmatch-2026-09-09/results/eager-f6-10k-final.json",
+      "sha256": "a7f30e8e9fc5f2576983251dfe166504731363766ee494a784f5bf4b1c6c61d9"
+    },
+    "lazy_families": {
+      "path": "experiments/lazy-nonmatch-2026-09-09/results/lazy-f6-10k-final.json",
+      "sha256": "f8416b79ce1c912abbd95a45647f58b5e55a0b0fb6c0363f0071aa48018f710c"
+    }
+  },
+  "interpretation": "candidate tri-state decisions equal; final partitions differ under the finite detailed-comparison budget",
+  "metrics": {
+    "eager": {
+      "abstain_comparison_count": 1274,
+      "budget_blocked_merge_count": 4130,
+      "budget_limited": true,
+      "cache_hit_count": 1683,
+      "candidate_alignment_cells": 25839838,
+      "candidate_detailed_comparison_count": 8759,
+      "on_demand_alignment_cells": 2465,
+      "on_demand_comparison_count": 1241,
+      "remaining_alignment_cells": 474157697,
+      "remaining_comparisons": 0,
+      "total_alignment_cells": 25842303,
+      "total_detailed_comparisons": 10000
+    },
+    "lazy": {
+      "abstain_comparison_count": 1274,
+      "accounting_mode": "lazy-nonmatch",
+      "budget_blocked_merge_count": 3913,
+      "budget_limited": true,
+      "cache_hit_count": 2638,
+      "candidate_alignment_cells": 6899760,
+      "candidate_detailed_comparison_count": 8021,
+      "cheap_check_count": 25441,
+      "cheap_nonmatch_count": 738,
+      "on_demand_alignment_cells": 4214,
+      "on_demand_comparison_count": 1979,
+      "remaining_alignment_cells": 493096026,
+      "remaining_comparisons": 0,
+      "total_alignment_cells": 6903974,
+      "total_detailed_comparisons": 10000
+    }
+  },
+  "partition_equality": {
+    "accepted_family_sets_equal": false,
+    "eager_accepted_family_count": 134,
+    "eager_accepted_member_count": 475,
+    "eager_only_accepted_member_count": 0,
+    "eager_only_family_count": 3,
+    "lazy_accepted_family_count": 134,
+    "lazy_accepted_member_count": 491,
+    "lazy_only_accepted_member_count": 16,
+    "lazy_only_family_count": 3,
+    "status_members_equal": false
+  },
+  "resource": {
+    "address_space_limit_bytes": 12884901888,
+    "completion_checked": true,
+    "eager_f6_status": "completed",
+    "eager_status": "artifact_completed",
+    "lazy_f6_status": "completed",
+    "lazy_status": "artifact_completed",
+    "measured_runs": {
+      "address_space_limit_bytes": 12884901888,
+      "code_sha256_at_run": {
+        "frozen_v1/v1_engine.py": "2d96893ca22dbc3a715d1fc1fa411a2b35fafe587cad652a084a8defab5f9886",
+        "real_v1_adapter.py": "e99b39145959f2ca8ee0aa4c6bb32c65b62f0dc5dfaa45bf36bbac379f69adb0",
+        "v1_grouping.py": "49369a2f0766be0c5a1664bf58709a7f1168c606ebecaade8bef10d06394cf6a"
+      },
+      "eager": {
+        "elapsed_seconds": 46.09,
+        "f6_status": "completed",
+        "family_output": "results/eager-f6-10k-final.json",
+        "family_output_sha256": "a7f30e8e9fc5f2576983251dfe166504731363766ee494a784f5bf4b1c6c61d9",
+        "max_rss_kib": 4604928,
+        "system_seconds": 2.99,
+        "user_seconds": 38.1
+      },
+      "formal_config_sha256": "77f394244c67b6633698e80af5265da4544c8ad5033aff7d0474a5ff8f1eebfa",
+      "input_binary_sha256": "3c07eb724eefb1bc5052c3cdf3e8597f9c51eb42a9b09b86265d9994bc8bbf83",
+      "input_body_sha256": "de5b5409110c9a99c4039603f62446b07a94e04ab894acf33bf52adf77cf4805",
+      "input_candidate_sha256": "077c1cfbf22b7e82c13c1703a77e17d1f3bec4b82ef2356a421969fe01837161",
+      "lazy": {
+        "elapsed_seconds": 23.6,
+        "f6_status": "completed",
+        "family_output": "results/lazy-f6-10k-final.json",
+        "family_output_sha256": "f8416b79ce1c912abbd95a45647f58b5e55a0b0fb6c0363f0071aa48018f710c",
+        "max_rss_kib": 4604820,
+        "system_seconds": 2.96,
+        "user_seconds": 15.99
+      },
+      "mode": "production-budget-real-zoxide-final-code",
+      "timeout_seconds": 600
+    },
+    "timeout_seconds": 600
+  },
+  "schema_version": 1
+}

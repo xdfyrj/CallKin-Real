@@ -1,0 +1,39 @@
+{
+  "mode": "bounded-real-semantic-equivalence-with-certificate",
+  "f6_status": {
+    "eager": "completed",
+    "lazy": "completed"
+  },
+  "selection_metadata": "results/subset-64-cert.metadata.json",
+  "subset_candidate_sha256": "eb2f1bd593aed0348d8b5c0c1781c8e24792f4758eaa9b875240a96e636575ec",
+  "formal_config_sha256": "77f394244c67b6633698e80af5265da4544c8ad5033aff7d0474a5ff8f1eebfa",
+  "timeout_seconds": 600,
+  "address_space_limit_bytes": 12884901888,
+  "eager": {
+    "elapsed_seconds": 15.62,
+    "user_seconds": 7.84,
+    "system_seconds": 3.28,
+    "max_rss_kib": 4604780,
+    "family_output": "results/eager-f6-subset64-cert.json",
+    "family_output_sha256": "c76bd9124cd4ed4ba9841bf36ab7bf91627fd6ddcebc78a9e4586e4fcd552a9c",
+    "family_output_gzip": "results/eager-f6-subset64-cert.json.gz",
+    "family_output_gzip_sha256": "b1d0b8daace25542c8d5958c20a190b4db38ca0cf945943c7da2d769df84b18a"
+  },
+  "lazy": {
+    "elapsed_seconds": 16.10,
+    "user_seconds": 8.16,
+    "system_seconds": 3.30,
+    "max_rss_kib": 4604544,
+    "family_output": "results/lazy-f6-subset64-cert.json",
+    "family_output_sha256": "4f0f0717556e015e075ccde26d361adc7d7156711737be97764c9120248d7da1",
+    "family_output_gzip": "results/lazy-f6-subset64-cert.json.gz",
+    "family_output_gzip_sha256": "e02dda92c67319b96e47e4cbf88623226986de90ce4f2ed73ac3d8b685481d6a"
+  },
+  "input_binary_sha256": "3c07eb724eefb1bc5052c3cdf3e8597f9c51eb42a9b09b86265d9994bc8bbf83",
+  "input_body_sha256": "de5b5409110c9a99c4039603f62446b07a94e04ab894acf33bf52adf77cf4805",
+  "code_sha256_at_run": {
+    "v1_grouping.py": "49369a2f0766be0c5a1664bf58709a7f1168c606ebecaade8bef10d06394cf6a",
+    "frozen_v1/v1_engine.py": "2d96893ca22dbc3a715d1fc1fa411a2b35fafe587cad652a084a8defab5f9886",
+    "real_v1_adapter.py": "e99b39145959f2ca8ee0aa4c6bb32c65b62f0dc5dfaa45bf36bbac379f69adb0"
+  }
+}

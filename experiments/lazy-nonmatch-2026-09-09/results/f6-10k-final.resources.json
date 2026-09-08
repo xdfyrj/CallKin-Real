@@ -1,0 +1,36 @@
+{
+  "mode": "production-budget-real-zoxide-final-code",
+  "timeout_seconds": 600,
+  "address_space_limit_bytes": 12884901888,
+  "input_binary_sha256": "3c07eb724eefb1bc5052c3cdf3e8597f9c51eb42a9b09b86265d9994bc8bbf83",
+  "input_body_sha256": "de5b5409110c9a99c4039603f62446b07a94e04ab894acf33bf52adf77cf4805",
+  "input_candidate_sha256": "077c1cfbf22b7e82c13c1703a77e17d1f3bec4b82ef2356a421969fe01837161",
+  "formal_config_sha256": "77f394244c67b6633698e80af5265da4544c8ad5033aff7d0474a5ff8f1eebfa",
+  "code_sha256_at_run": {
+    "v1_grouping.py": "49369a2f0766be0c5a1664bf58709a7f1168c606ebecaade8bef10d06394cf6a",
+    "frozen_v1/v1_engine.py": "2d96893ca22dbc3a715d1fc1fa411a2b35fafe587cad652a084a8defab5f9886",
+    "real_v1_adapter.py": "e99b39145959f2ca8ee0aa4c6bb32c65b62f0dc5dfaa45bf36bbac379f69adb0"
+  },
+  "eager": {
+    "f6_status": "completed",
+    "elapsed_seconds": 46.09,
+    "user_seconds": 38.10,
+    "system_seconds": 2.99,
+    "max_rss_kib": 4604928,
+    "family_output": "results/eager-f6-10k-final.json",
+    "family_output_sha256": "a7f30e8e9fc5f2576983251dfe166504731363766ee494a784f5bf4b1c6c61d9",
+    "family_output_gzip": "results/eager-f6-10k-final.json.gz",
+    "family_output_gzip_sha256": "f55a4c1606322f69463a14c6864a8b9741a8f384563f548848c98cdb4973c54a"
+  },
+  "lazy": {
+    "f6_status": "completed",
+    "elapsed_seconds": 23.60,
+    "user_seconds": 15.99,
+    "system_seconds": 2.96,
+    "max_rss_kib": 4604820,
+    "family_output": "results/lazy-f6-10k-final.json",
+    "family_output_sha256": "f8416b79ce1c912abbd95a45647f58b5e55a0b0fb6c0363f0071aa48018f710c",
+    "family_output_gzip": "results/lazy-f6-10k-final.json.gz",
+    "family_output_gzip_sha256": "5564bdad31e848d326f6a7a52ce974b05e34e0ab122b9b51ce37293c6bc3ded8"
+  }
+}
