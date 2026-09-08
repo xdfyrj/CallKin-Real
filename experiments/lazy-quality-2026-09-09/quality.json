@@ -1,0 +1,426 @@
+{
+  "accepted_pair_delta": {
+    "added_pair_count": 955,
+    "added_pair_kinds": {
+      "correct_join": 0,
+      "neutral": 0,
+      "outside_gt": 955,
+      "wrong_join": 0
+    },
+    "changed_family_count": 3,
+    "families": [
+      {
+        "added_members": [
+          "FUN_00187256"
+        ],
+        "added_pair_count": 2,
+        "added_pair_kinds": {
+          "correct_join": 0,
+          "neutral": 0,
+          "outside_gt": 2,
+          "wrong_join": 0
+        },
+        "eager_gt_member_count": 0,
+        "eager_size": 2,
+        "lazy_gt_member_count": 0,
+        "lazy_size": 3,
+        "overlap_size": 2,
+        "removed_members": []
+      },
+      {
+        "added_members": [
+          "FUN_0017ab09",
+          "FUN_0017ab6e"
+        ],
+        "added_pair_count": 17,
+        "added_pair_kinds": {
+          "correct_join": 0,
+          "neutral": 0,
+          "outside_gt": 17,
+          "wrong_join": 0
+        },
+        "eager_gt_member_count": 0,
+        "eager_size": 8,
+        "lazy_gt_member_count": 0,
+        "lazy_size": 10,
+        "overlap_size": 8,
+        "removed_members": []
+      },
+      {
+        "added_members": [
+          "FUN_00166af6",
+          "FUN_00166b11",
+          "FUN_00166b2c",
+          "FUN_00166b47",
+          "FUN_00166b7c",
+          "FUN_00166b97",
+          "FUN_00166bb2",
+          "FUN_00166bcd",
+          "FUN_00166be8",
+          "FUN_00166c00",
+          "FUN_00166c1b",
+          "FUN_00166c33",
+          "FUN_00166c4e"
+        ],
+        "added_pair_count": 936,
+        "added_pair_kinds": {
+          "correct_join": 0,
+          "neutral": 0,
+          "outside_gt": 936,
+          "wrong_join": 0
+        },
+        "eager_gt_member_count": 0,
+        "eager_size": 66,
+        "lazy_gt_member_count": 0,
+        "lazy_size": 79,
+        "overlap_size": 66,
+        "removed_members": []
+      }
+    ],
+    "removed_pair_count": 0,
+    "removed_pair_kinds": {
+      "correct_join": 0,
+      "neutral": 0,
+      "outside_gt": 0,
+      "wrong_join": 0
+    }
+  },
+  "artifact": "lazy-quality-rescore",
+  "binary_containment_diagnostic": {
+    "all_inside_nonzero_stt_func_extent": true,
+    "containing_extent_counts": {
+      "0x5f4c0+32362": 13,
+      "0x7aad0+90": 1,
+      "0x7ab30+95": 1,
+      "0x87220+92": 1
+    },
+    "id_bias": "0x100000",
+    "rows": [
+      {
+        "address": "0x66af6",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf37c]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166af6",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66b11",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf361]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166b11",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66b2c",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf346]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166b2c",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66b47",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf32b]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166b47",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66b7c",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf2f6]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166b7c",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66b97",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf2db]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166b97",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66bb2",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf2c0]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166bb2",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66bcd",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf2a5]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166bcd",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66be8",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf28a]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166be8",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66c00",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf272]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166c00",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66c1b",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf257]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166c1b",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66c33",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf23f]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166c33",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x66c4e",
+        "containing_address": "0x5f4c0",
+        "containing_size": 32362,
+        "containing_symbol": "_ZN74_$LT$zoxide..cmd..cmd..Cmd$u20$as$u20$clap_builder..derive..Subcommand$GT$19augment_subcommands17h9ce81b8e4fb81979E.llvm.7285977765629496657",
+        "exact_symbol_start": false,
+        "first_instruction": "call qword ptr [rip + 0xdf224]",
+        "got_slot": "0x145e78",
+        "id": "FUN_00166c4e",
+        "rela_addend": 1291915,
+        "rela_symbol": "_ZN4core9panicking16panic_in_cleanup17h5f6bde45d17ae243E"
+      },
+      {
+        "address": "0x7ab09",
+        "containing_address": "0x7aad0",
+        "containing_size": 90,
+        "containing_symbol": "_ZN4core3ptr118drop_in_place$LT$alloc..boxed..Box$LT$dyn$u20$core..error..Error$u2b$core..marker..Send$u2b$core..marker..Sync$GT$$GT$17he489ed03a9e76e72E",
+        "exact_symbol_start": false,
+        "first_instruction": "mov r15, rax",
+        "got_slot": null,
+        "id": "FUN_0017ab09",
+        "rela_addend": null,
+        "rela_symbol": null
+      },
+      {
+        "address": "0x7ab6e",
+        "containing_address": "0x7ab30",
+        "containing_size": 95,
+        "containing_symbol": "_ZN4core3ptr146drop_in_place$LT$core..option..Option$LT$alloc..boxed..Box$LT$dyn$u20$core..error..Error$u2b$core..marker..Send$u2b$core..marker..Sync$GT$$GT$$GT$17heff3d38a50025abeE",
+        "exact_symbol_start": false,
+        "first_instruction": "mov r15, rax",
+        "got_slot": null,
+        "id": "FUN_0017ab6e",
+        "rela_addend": null,
+        "rela_symbol": null
+      },
+      {
+        "address": "0x87256",
+        "containing_address": "0x87220",
+        "containing_size": 92,
+        "containing_symbol": "_ZN4core3ptr251drop_in_place$LT$alloc..vec..Vec$LT$alloc..boxed..Box$LT$dyn$u20$core..ops..function..FnMut$LT$$LP$$RP$$GT$$u2b$Output$u20$$u3d$$u20$core..result..Result$LT$$LP$$RP$$C$std..io..error..Error$GT$$u2b$core..marker..Send$u2b$core..marker..Sync$GT$$GT$$GT$17hdbc5eff2469fe036E",
+        "exact_symbol_start": false,
+        "first_instruction": "mov r14, rax",
+        "got_slot": null,
+        "id": "FUN_00187256",
+        "rela_addend": null,
+        "rela_symbol": null
+      }
+    ]
+  },
+  "body_cache_loaded": false,
+  "input_hashes": {
+    "body_stage_recorded_only": "de5b5409110c9a99c4039603f62446b07a94e04ab894acf33bf52adf77cf4805",
+    "candidate_queue": "077c1cfbf22b7e82c13c1703a77e17d1f3bec4b82ef2356a421969fe01837161",
+    "eager_prediction": "a7f30e8e9fc5f2576983251dfe166504731363766ee494a784f5bf4b1c6c61d9",
+    "ground_truth": "b5e641338cd098ead94ea299b7dccd3a4ca2b8242743656762cf8f01617d967d",
+    "lazy_prediction": "f8416b79ce1c912abbd95a45647f58b5e55a0b0fb6c0363f0071aa48018f710c",
+    "linkage_audit": "aea76c11cb78074695ea2ac4acc8f08026f61d81fa747d9d42948bf82f3da579",
+    "nonstripped_binary": "a37ccf63601b2012ba0edbc2ab63d9442f4830fbb41e6b87f1c43a16f32dba7c",
+    "relation_stage": "d203bd0c1bf2dc19a57e96764fbd394ecaee86fb872c4ca549e0d5d9e05e9896",
+    "run_manifest": "1395938b69d55b4fb416dfeb0d56cddc441c9f7a2984dc13cbb96b148a8f17d7",
+    "stripped_binary_recorded": "3c07eb724eefb1bc5052c3cdf3e8597f9c51eb42a9b09b86265d9994bc8bbf83",
+    "universe_stage": "43a4a990d6bd40ca03edb385f27cd74c708ae6533d02c0edddba6bf3a06d9f0b"
+  },
+  "pair_decision_replay": {
+    "common_decision_mismatch_count": 0,
+    "common_records": 11274,
+    "eager_unique_records": 11274,
+    "lazy_only_records": 738,
+    "lazy_unique_records": 12012
+  },
+  "prediction_summary": {
+    "eager_accepted_family_count": 134,
+    "eager_accepted_member_count": 475,
+    "lazy_accepted_family_count": 134,
+    "lazy_accepted_member_count": 491,
+    "new_lazy_accepted_members": [
+      "FUN_00166af6",
+      "FUN_00166b11",
+      "FUN_00166b2c",
+      "FUN_00166b47",
+      "FUN_00166b7c",
+      "FUN_00166b97",
+      "FUN_00166bb2",
+      "FUN_00166bcd",
+      "FUN_00166be8",
+      "FUN_00166c00",
+      "FUN_00166c1b",
+      "FUN_00166c33",
+      "FUN_00166c4e",
+      "FUN_0017ab09",
+      "FUN_0017ab6e",
+      "FUN_00187256"
+    ],
+    "removed_eager_accepted_members": []
+  },
+  "quality": {
+    "full_gt_674": {
+      "eager": {
+        "f1": 0.0282,
+        "false_negative": 1224,
+        "false_positive": 15,
+        "neutral_pair_counts": {
+          "ambiguous-neutral": 2686,
+          "duplicate-neutral": 41,
+          "unresolved-neutral": 0
+        },
+        "neutral_pair_total": 2727,
+        "precision": 0.5455,
+        "recall": 0.0145,
+        "scored_member_count": 674,
+        "true_negative": 222817,
+        "true_positive": 18
+      },
+      "lazy": {
+        "f1": 0.0282,
+        "false_negative": 1224,
+        "false_positive": 15,
+        "neutral_pair_counts": {
+          "ambiguous-neutral": 2686,
+          "duplicate-neutral": 41,
+          "unresolved-neutral": 0
+        },
+        "neutral_pair_total": 2727,
+        "precision": 0.5455,
+        "recall": 0.0145,
+        "scored_member_count": 674,
+        "true_negative": 222817,
+        "true_positive": 18
+      }
+    },
+    "gt_overlap_617": {
+      "eager": {
+        "f1": 0.0283,
+        "false_negative": 1222,
+        "false_positive": 15,
+        "neutral_pair_counts": {
+          "ambiguous-neutral": 2458,
+          "duplicate-neutral": 40,
+          "unresolved-neutral": 0
+        },
+        "neutral_pair_total": 2498,
+        "precision": 0.5455,
+        "recall": 0.0145,
+        "scored_member_count": 617,
+        "true_negative": 186283,
+        "true_positive": 18
+      },
+      "lazy": {
+        "f1": 0.0283,
+        "false_negative": 1222,
+        "false_positive": 15,
+        "neutral_pair_counts": {
+          "ambiguous-neutral": 2458,
+          "duplicate-neutral": 40,
+          "unresolved-neutral": 0
+        },
+        "neutral_pair_total": 2498,
+        "precision": 0.5455,
+        "recall": 0.0145,
+        "scored_member_count": 617,
+        "true_negative": 186283,
+        "true_positive": 18
+      }
+    }
+  },
+  "schema_version": 1,
+  "scope": "equivalent preserved-output rescoring; no new inference",
+  "scoring_definition": {
+    "full_universe": "all GT origin members (674)",
+    "gt_overlap_universe": "original run member target_ids intersect GT origin members (617)",
+    "labels": "normalized origin/linkage proxy; no exact source-truth claim",
+    "neutral_helper": "evaluate.neutral_pairs_from_audit",
+    "outside_gt": "at least one pair ID absent from GT origin members; not auto-FP",
+    "pair_helper": "evaluate.score_partition"
+  },
+  "target_universe": {
+    "eager_target_count": 5335,
+    "full_gt_count": 674,
+    "gt_overlap_count": 617,
+    "lazy_target_count": 5335,
+    "target_sets_equal": true
+  }
+}
