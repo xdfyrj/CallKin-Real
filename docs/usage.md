@@ -5,9 +5,18 @@
 The quick start runs anonymous grouping with `--no-flirt`. Additional options:
 
 - `--component-budgeted-v1`: process whole candidate components within the comparison budget; expensive components can be deferred.
+- `--lazy-nonmatch`: opt into exact non-match certificates from normalized mnemonic counts before F4 alignment. The run manifest and family metrics record the changed `lazy-nonmatch` accounting mode; the default remains the historical eager path.
 - `--verify-label-blind`: compare the grouping artifacts from runs with and without FLIRT.
 
 `run.manifest.json` summarizes the pipeline. `run.json` is the lower-level manifest used by the evaluator and relaxed command.
+
+Lazy certificates preserve per-pair decisions. They preserve the final
+partition when neither run is limited by a comparison budget; under finite
+budgets, saved work can change which complete-link merges fit. A certified
+pair stores its exact cheap metric and a proof marker; F4-only fields remain
+`null` because they were not computed.
+The vendored F6 engine adaptation is pinned in
+`frozen_reference_manifest.json`.
 
 ## Optional FLIRT labels
 

@@ -108,8 +108,10 @@
         "sha256": "300580df6cf4fa968b820aa2611c4197db15197932f7830738f6b5f962f66659"
       },
       "v1_engine.py": {
-        "kind": "frozen",
-        "sha256": "6e6c92a64d22c2a38e82078a99e29530f8fe6f7c08b8a0ad5e226d64297ef5b0"
+        "kind": "adapted",
+        "sha256": "2d96893ca22dbc3a715d1fc1fa411a2b35fafe587cad652a084a8defab5f9886",
+        "source_sha256": "6e6c92a64d22c2a38e82078a99e29530f8fe6f7c08b8a0ad5e226d64297ef5b0",
+        "adaptation": "optional lazy-nonmatch cache-factory hook; default F6 path preserved"
       },
       "v1_retrieval_views.py": {
         "kind": "frozen",

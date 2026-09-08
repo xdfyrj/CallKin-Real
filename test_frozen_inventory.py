@@ -50,7 +50,8 @@ def test_reference_manifest_covers_the_exact_callkin_inventory():
     manifest = load_manifest()
     entries = manifest["frozen_v1"]["files"]
     assert set(entries) == {path.as_posix() for path in _inventory()}
-    assert sum(item["kind"] == "frozen" for item in entries.values()) == 21
+    assert sum(item["kind"] == "frozen" for item in entries.values()) == 20
+    assert sum(item["kind"] == "adapted" for item in entries.values()) == 1
     assert sum(item["kind"] == "stub" for item in entries.values()) == 5
     assert expected_hash("body_similarity.py", root_file=True)
 
@@ -67,13 +68,15 @@ def test_every_file_is_frozen_or_a_declared_stub() -> str:
             f"frozen_v1 inventory mismatch: missing={missing}, extra={extra}"
         )
 
-    identical, stubs, drifted = [], [], []
+    identical, adapted, stubs, drifted = [], [], [], []
     for relative in _inventory():
         name = relative.as_posix()
         here = FROZEN_DIR / relative
         entry = entries[name]
         if entry["kind"] == "stub":
             stubs.append(name)
+        if entry["kind"] == "adapted":
+            adapted.append(name)
         if _sha256(here) != entry["sha256"]:
             drifted.append(f"{name} differs from the CallKin reference")
         elif entry["kind"] == "frozen":
@@ -86,7 +89,8 @@ def test_every_file_is_frozen_or_a_declared_stub() -> str:
         "body_similarity.py", root_file=True
     ):
         raise AssertionError("body_similarity.py differs from the CallKin reference")
-    return f"  ({len(identical)} frozen files, {len(stubs)} declared stubs)"
+    assert adapted == ["v1_engine.py"]
+    return f"  ({len(identical)} frozen files, {len(adapted)} adapted files, {len(stubs)} declared stubs)"
 
 
 def test_each_stub_says_why_it_refuses():

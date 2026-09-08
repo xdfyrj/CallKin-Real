@@ -36,14 +36,18 @@ UNKNOWN = "unknown"
 ABSTAIN = "abstain"
 DECISIONS = (MATCH, REJECT, UNKNOWN, ABSTAIN)
 
+# The optional lazy path is an explicit CallKin-Real adaptation of this
+# vendored engine.  The default cache and builder path remain the frozen F6.
+REFERENCE_ENGINE_SHA256 = "6e6c92a64d22c2a38e82078a99e29530f8fe6f7c08b8a0ad5e226d64297ef5b0"
+
 
 @dataclass(frozen=True)
 class PairFeatures:
     pair: PairKey
-    structure_score: float
-    aligned_instruction_ratio: float
-    sequence_ratio: float
-    mnemonic_multiset_jaccard: float
+    structure_score: float | None
+    aligned_instruction_ratio: float | None
+    sequence_ratio: float | None
+    mnemonic_multiset_jaccard: float | None
     constant_similarity: float | None
     call_shape_similarity: float | None
     data_reference_similarity: float | None
@@ -53,9 +57,10 @@ class PairFeatures:
     same_in_signature: bool | None
     both_complete: bool
     opaque_indirect_jumps: int
+    proof: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "pair": self.pair.to_list(),
             "structure_score": self.structure_score,
             "aligned_instruction_ratio": self.aligned_instruction_ratio,
@@ -71,6 +76,9 @@ class PairFeatures:
             "both_complete": self.both_complete,
             "opaque_indirect_jumps": self.opaque_indirect_jumps,
         }
+        if self.proof is not None:
+            result["proof"] = dict(self.proof)
+        return result
 
 
 @dataclass(frozen=True)
@@ -252,6 +260,9 @@ def classify_pair(
     if config.abstain_on_opaque_indirect and features.opaque_indirect_jumps > 0:
         return ABSTAIN
 
+    if features.structure_score is None:
+        return UNKNOWN
+
     reject_threshold = config.structure_reject_threshold
     if reject_threshold is not None and features.structure_score <= reject_threshold:
         return REJECT
@@ -286,10 +297,14 @@ class PairEvidenceCache:
         candidate_pairs: Iterable[CandidatePair | Mapping[str, Any]],
         config: PairPolicyConfig,
         feature_provider: Callable[[PairKey], PairFeatures] | None = None,
+        lazy_nonmatch: bool = False,
     ) -> None:
         self.bodies = bodies
         self.config = config
         self.feature_provider = feature_provider
+        # A custom provider owns the complete evaluator; a cheap certificate
+        # must never override it.
+        self.lazy_nonmatch_enabled = bool(lazy_nonmatch and feature_provider is None)
         self._candidate_records: dict[PairKey, CandidatePair | Mapping[str, Any]] = {}
         for item in candidate_pairs:
             pair = _pair_from_record(item)
@@ -303,6 +318,9 @@ class PairEvidenceCache:
         self.on_demand_alignment_cells = 0
         self.abstain_comparisons = 0
         self.cache_hits = 0
+        self.cheap_check_count = 0
+        self.cheap_nonmatch_count = 0
+        self._cheap_scores: dict[PairKey, float] = {}
 
     @property
     def entries(self) -> dict[PairKey, PairEvaluation]:
@@ -331,14 +349,12 @@ class PairEvidenceCache:
         """
         if pair in self._entries:
             return False
-        left = self.bodies.get(pair.left)
-        right = self.bodies.get(pair.right)
-        if left is None or right is None or not left.complete or not right.complete:
+        eligible = self._f4_bodies(pair)
+        if eligible is None:
             return False
-        if self.config.abstain_on_opaque_indirect and max(
-            int(left.quality.get("opaque_indirect_jumps", 0)),
-            int(right.quality.get("opaque_indirect_jumps", 0)),
-        ) > 0:
+        if self._cheap_evaluation(
+            pair, *eligible, self._candidate_records.get(pair)
+        ) is not None:
             return False
         return True
 
@@ -403,6 +419,9 @@ class PairEvidenceCache:
             features = _abstain_features(pair, body_a, body_b, candidate_record)
             decision = ABSTAIN
         else:
+            certified = self._cheap_evaluation(pair, body_a, body_b, candidate_record)
+            if certified is not None:
+                return certified
             cells = self.alignment_cells(pair)
             if source == "candidate":
                 self.candidate_comparisons += 1
@@ -434,6 +453,93 @@ class PairEvidenceCache:
         self._entries[pair] = evaluation
         return evaluation
 
+    def _f4_bodies(
+        self, pair: PairKey
+    ) -> tuple[FunctionBody, FunctionBody] | None:
+        left = self.bodies.get(pair.left)
+        right = self.bodies.get(pair.right)
+        if left is None or right is None or not left.complete or not right.complete:
+            return None
+        if self.config.abstain_on_opaque_indirect and max(
+            int(left.quality.get("opaque_indirect_jumps", 0)),
+            int(right.quality.get("opaque_indirect_jumps", 0)),
+        ) > 0:
+            return None
+        return left, right
+
+    def _cheap_evaluation(
+        self,
+        pair: PairKey,
+        body_a: FunctionBody,
+        body_b: FunctionBody,
+        candidate_record: CandidatePair | Mapping[str, Any] | None = None,
+    ) -> PairEvaluation | None:
+        if not self.lazy_nonmatch_enabled:
+            return None
+        cached = self._entries.get(pair)
+        if cached is not None:
+            return cached
+        score = self._cheap_scores.get(pair)
+        if score is None:
+            score = _mnemonic_multiset_jaccard(body_a, body_b)
+            self._cheap_scores[pair] = score
+            self.cheap_check_count += 1
+
+        reject_threshold = self.config.structure_reject_threshold
+        if reject_threshold is not None and score <= reject_threshold:
+            decision = REJECT
+            threshold = reject_threshold
+            relation = "<="
+        elif (
+            reject_threshold is None
+            and score < self.config.structure_match_threshold
+        ):
+            decision = UNKNOWN
+            threshold = self.config.structure_match_threshold
+            relation = "<"
+        else:
+            return None
+
+        same_final, same_prior, same_out, same_in = _candidate_flags(candidate_record)
+        features = PairFeatures(
+            pair=pair,
+            structure_score=None,
+            aligned_instruction_ratio=None,
+            sequence_ratio=None,
+            mnemonic_multiset_jaccard=score,
+            constant_similarity=None,
+            call_shape_similarity=None,
+            data_reference_similarity=None,
+            same_final_color=same_final,
+            same_prior_color=same_prior,
+            same_out_signature=same_out,
+            same_in_signature=same_in,
+            both_complete=True,
+            opaque_indirect_jumps=max(
+                int(body_a.quality.get("opaque_indirect_jumps", 0)),
+                int(body_b.quality.get("opaque_indirect_jumps", 0)),
+            ),
+            proof={
+                "kind": "cheap_nonmatch",
+                "metric": "mnemonic_multiset_jaccard",
+                "relation": relation,
+                "threshold": threshold,
+                "uncomputed": [
+                    "structure_score",
+                    "aligned_instruction_ratio",
+                    "sequence_ratio",
+                    "constant_similarity",
+                    "call_shape_similarity",
+                    "data_reference_similarity",
+                ],
+            },
+        )
+        source = "candidate" if pair in self._candidate_records else "on-demand"
+        evaluation = PairEvaluation(pair, decision, features, source)
+        self._entries[pair] = evaluation
+        self.cheap_nonmatch_count += 1
+        return evaluation
+
 
 def family_id_for_members(members: Iterable[str]) -> str:
     canonical = _canonical_members(members)
@@ -449,6 +555,7 @@ def build_family_artifact(
     bodies: Mapping[str, FunctionBody],
     config: PairPolicyConfig,
     feature_provider: Callable[[PairKey], PairFeatures] | None = None,
+    cache_factory: Callable[..., PairEvidenceCache] | None = None,
     body_sha256: str | None = None,
     body_provenance: Mapping[str, Any] | None = None,
     candidate_sha256: str | None = None,
@@ -492,7 +599,7 @@ def build_family_artifact(
     if set(bodies_for_targets) == target_set and declared_incomplete != observed_incomplete:
         raise ValueError("candidate/body incomplete-body set mismatch")
     candidate_records = candidate_artifact["pairs"]
-    cache = PairEvidenceCache(
+    cache = (cache_factory or PairEvidenceCache)(
         bodies_for_targets,
         candidate_records,
         config,
@@ -645,6 +752,30 @@ def build_family_artifact(
         result_provenance["body_evidence_sha256"] = body_sha256
     if candidate_sha256 is not None:
         result_provenance["candidate_artifact_sha256"] = candidate_sha256
+    metrics = {
+        "candidate_detailed_comparison_count": cache.candidate_comparisons,
+        "on_demand_comparison_count": cache.on_demand_comparisons,
+        "cache_hit_count": cache.cache_hits,
+        "abstain_comparison_count": cache.abstain_comparisons,
+        "total_detailed_comparisons": cache.total_comparisons,
+        "candidate_alignment_cells": cache.candidate_alignment_cells,
+        "on_demand_alignment_cells": cache.on_demand_alignment_cells,
+        "total_alignment_cells": cache.total_alignment_cells,
+        "budget_blocked_merge_count": budget_blocked_merges,
+        "budget_limited": budget_blocked_merges > 0,
+        **cache.remaining(),
+    }
+    if cache.lazy_nonmatch_enabled:
+        result_provenance["f6_engine_adaptation"] = {
+            "kind": "lazy_nonmatch",
+            "reference_engine_sha256": REFERENCE_ENGINE_SHA256,
+            "accounting_mode": "lazy-nonmatch",
+        }
+        metrics.update({
+            "accounting_mode": "lazy-nonmatch",
+            "cheap_check_count": cache.cheap_check_count,
+            "cheap_nonmatch_count": cache.cheap_nonmatch_count,
+        })
     output = {
         "schema_version": 1,
         "artifact": "v1-family-grouping",
@@ -673,19 +804,7 @@ def build_family_artifact(
             for pair in sorted(cache.entries)
         ],
         "blocked_merges": blocked_merges,
-        "metrics": {
-            "candidate_detailed_comparison_count": cache.candidate_comparisons,
-            "on_demand_comparison_count": cache.on_demand_comparisons,
-            "cache_hit_count": cache.cache_hits,
-            "abstain_comparison_count": cache.abstain_comparisons,
-            "total_detailed_comparisons": cache.total_comparisons,
-            "candidate_alignment_cells": cache.candidate_alignment_cells,
-            "on_demand_alignment_cells": cache.on_demand_alignment_cells,
-            "total_alignment_cells": cache.total_alignment_cells,
-            "budget_blocked_merge_count": budget_blocked_merges,
-            "budget_limited": budget_blocked_merges > 0,
-            **cache.remaining(),
-        },
+        "metrics": metrics,
     }
     _validate_family_statuses(output)
     return output
@@ -804,6 +923,20 @@ def _slot_similarity(first: Counter[Any], second: Counter[Any]) -> float | None:
     return sum((first & second).values()) / union if union else 1.0
 
 
+def _mnemonic_multiset_jaccard(
+    first: FunctionBody, second: FunctionBody
+) -> float:
+    """The exact cheap upper bound used by F4's body comparison."""
+    left = Counter(
+        str(item["mnemonic_class"]).split()[0] for item in first.instructions
+    )
+    right = Counter(
+        str(item["mnemonic_class"]).split()[0] for item in second.instructions
+    )
+    union = sum((left | right).values())
+    return sum((left & right).values()) / union if union else 1.0
+
+
 def _freeze(value: Any) -> Any:
     if isinstance(value, Mapping):
         return tuple(sorted((str(key), _freeze(item)) for key, item in value.items()))
@@ -819,6 +952,8 @@ def _freeze(value: Any) -> Any:
 
 
 def _match_margin(features: PairFeatures, config: PairPolicyConfig) -> float:
+    if features.structure_score is None:
+        return float("-inf")
     values = [
         features.structure_score - config.structure_match_threshold,
     ]

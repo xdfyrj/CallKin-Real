@@ -9,8 +9,10 @@ Strict grouping. The policy is `frozen_v1/configs/v1.formal.json`, unchanged:
     max_comparison_count            10,000
     max_alignment_cell_budget       500,000,000
 
-`frozen_v1/v1_engine.py` is a byte-identical copy, so a family produced here is
-a family the formal V1 results would have produced from the same queue.
+`frozen_v1/v1_engine.py` carries one named CallKin-Real adaptation for the
+opt-in lazy path. With the flag omitted, its default cache and builder path
+remain the frozen F6 behavior; a family produced here is a family the formal
+V1 results would have produced from the same queue.
 
 The budget is priced before any comparison runs and the whole artifact is
 refused if it does not fit -- the frozen rule, because spending the budget
@@ -56,6 +58,8 @@ def price(
     candidate_artifact: dict[str, Any],
     source: RealV1Input,
     config: PairPolicyConfig,
+    *,
+    lazy_nonmatch: bool = False,
 ) -> dict[str, Any]:
     """What F6 would have to spend on this queue, before it spends any of it.
 
@@ -68,19 +72,26 @@ def price(
         for function_id in candidate_artifact["universe"]["target_ids"]
         if function_id in source.bodies
     }
-    cache = PairEvidenceCache(bodies, candidate_artifact["pairs"], config)
+    cache = PairEvidenceCache(
+        bodies,
+        candidate_artifact["pairs"],
+        config,
+        lazy_nonmatch=lazy_nonmatch,
+    )
     pairs = [_pair_from_record(item) for item in candidate_artifact["pairs"]]
-    comparisons, cells = cache.demand(pairs)
+    required_pairs = [pair for pair in pairs if cache.would_compare(pair)]
+    comparisons, cells = cache.demand(required_pairs)
 
     # A refusal is dominated by a few very large functions, so the distribution
     # is worth recording: a ceiling is a different problem from a long tail.
+    priced_pairs = required_pairs if lazy_nonmatch else pairs
     per_pair = sorted(
         len(bodies[pair.left].instructions) * len(bodies[pair.right].instructions)
-        for pair in pairs
+        for pair in priced_pairs
         if pair.left in bodies and pair.right in bodies
     )
     total = sum(per_pair) or 1
-    return {
+    accounting = {
         "pair_count": len(pairs),
         "required_comparisons": comparisons,
         "required_alignment_cells": cells,
@@ -92,6 +103,13 @@ def price(
         "alignment_cells_top10_share": round(sum(per_pair[-10:]) / total, 4),
         "alignment_cells_top50_share": round(sum(per_pair[-50:]) / total, 4),
     }
+    if lazy_nonmatch:
+        accounting.update({
+            "accounting_mode": "lazy-nonmatch",
+            "cheap_check_count": cache.cheap_check_count,
+            "cheap_nonmatch_count": cache.cheap_nonmatch_count,
+        })
+    return accounting
 
 
 def build_strict_families(
@@ -100,6 +118,7 @@ def build_strict_families(
     *,
     config: PairPolicyConfig,
     candidate_sha256: str,
+    lazy_nonmatch: bool = False,
 ) -> tuple[str, dict[str, Any] | None, dict[str, Any]]:
     """Run F6, or record why it refused.
 
@@ -115,7 +134,9 @@ def build_strict_families(
     already done, and done more strictly, by the adapter: it compares the
     actual bytes of body.json against the hash the universe recorded.
     """
-    accounting = price(candidate_artifact, source, config)
+    accounting = price(
+        candidate_artifact, source, config, lazy_nonmatch=lazy_nonmatch
+    )
     if not accounting["within_budget"]:
         return BUDGET_REFUSED, None, accounting
 
@@ -130,8 +151,27 @@ def build_strict_families(
         config=config,
         body_sha256=source.stage_sha256["body"],
         candidate_sha256=candidate_sha256,
+        cache_factory=(
+            _lazy_cache_factory if lazy_nonmatch else None
+        ),
     )
     return COMPLETED, families, accounting
+
+
+def _lazy_cache_factory(
+    bodies: dict[str, Any],
+    candidate_records: list[dict[str, Any]],
+    config: PairPolicyConfig,
+    *,
+    feature_provider: Any = None,
+) -> PairEvidenceCache:
+    return PairEvidenceCache(
+        bodies,
+        candidate_records,
+        config,
+        feature_provider=feature_provider,
+        lazy_nonmatch=True,
+    )
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -174,6 +214,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="F6 policy; defaults to the frozen v1.formal.json",
     )
     parser.add_argument("--top-k", type=int, default=16)
+    parser.add_argument(
+        "--lazy-nonmatch",
+        action="store_true",
+        help="certify exact non-matches from normalized mnemonic counts before F4",
+    )
     parser.add_argument("--output", help="families.strict.json path")
     return parser
 
@@ -194,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         status, families, accounting = build_strict_families(
             candidate_artifact, source,
             config=config, candidate_sha256=_sha256_bytes(raw),
+            lazy_nonmatch=args.lazy_nonmatch,
         )
         output = (
             Path(args.output) if args.output

@@ -35,7 +35,7 @@ from v1_retrieval import DEFAULT_TOP_K, build_candidate_artifacts
 from frozen_reference import expected_hash
 
 HERE = Path(__file__).resolve().parent
-COPIED = ("v1_engine.py", "configs/v1.formal.json")
+COPIED = ("configs/v1.formal.json",)
 
 # Spec 10.5. Written out so a silent edit to the config file fails here rather
 # than changing what "formal" means three stages downstream.
@@ -58,7 +58,18 @@ def test_the_copied_f6_is_byte_identical_to_the_frozen_one() -> str:
     for name in COPIED:
         here = HERE / "frozen_v1" / name
         assert _sha256(here) == expected_hash(name), f"{name} diverged from the frozen V1"
-    return f"  ({len(COPIED)} F6 files byte-identical to the frozen V1)"
+    return f"  ({len(COPIED)} frozen F6 config files byte-identical to the frozen V1)"
+
+
+def test_the_lazy_engine_adaptation_is_named_and_pinned():
+    from frozen_reference import load_manifest
+
+    entry = load_manifest()["frozen_v1"]["files"]["v1_engine.py"]
+    assert entry["kind"] == "adapted"
+    assert entry["source_sha256"] == (
+        "6e6c92a64d22c2a38e82078a99e29530f8fe6f7c08b8a0ad5e226d64297ef5b0"
+    )
+    assert "lazy-nonmatch" in entry["adaptation"]
 
 
 def test_the_formal_policy_is_the_one_the_spec_names():
@@ -318,6 +329,7 @@ def test_a_real_binary_runs_f6_or_says_why_it_could_not() -> str:
 
 def main() -> int:
     notes = [test_the_copied_f6_is_byte_identical_to_the_frozen_one()]
+    test_the_lazy_engine_adaptation_is_named_and_pinned()
     test_the_formal_policy_is_the_one_the_spec_names()
     test_f6_completes_inside_the_budget_and_the_artifact_validates()
     test_a_queue_that_does_not_fit_is_refused_whole()

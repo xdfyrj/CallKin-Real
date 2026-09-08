@@ -67,6 +67,7 @@ def analyze(
     no_flirt: bool = False,
     top_k: int = 16,
     component_budgeted_v1: bool = False,
+    lazy_nonmatch: bool = False,
 ) -> dict[str, Any]:
     """Run every stage, recording what each one did or could not do."""
     # Imported here rather than at module scope so a stage that fails to import
@@ -153,9 +154,14 @@ def analyze(
             budget=budget_summary,
         ))
         queue_sha256 = budgeted_sha256
+    strict_kwargs = {
+        "config": config,
+        "candidate_sha256": queue_sha256,
+    }
+    if lazy_nonmatch:
+        strict_kwargs["lazy_nonmatch"] = True
     status, families, accounting = v1_grouping.build_strict_families(
-        queue, source, config=config,
-        candidate_sha256=queue_sha256,
+        queue, source, **strict_kwargs
     )
     families_path = output_dir / f"{stem}.v1.families.strict.json"
     if families is None:
@@ -230,6 +236,8 @@ def analyze(
     command = {"no_flirt": no_flirt, "top_k": top_k}
     if component_budgeted_v1:
         command["component_budgeted_v1"] = True
+    if lazy_nonmatch:
+        command["lazy_nonmatch"] = True
     manifest = {
         "schema_version": 1,
         "artifact": "callkin-real-analysis-manifest",
@@ -264,6 +272,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="derive a whole-component F5 queue within the frozen F6 budget",
     )
     parser.add_argument(
+        "--lazy-nonmatch",
+        action="store_true",
+        help="certify exact non-matches from normalized mnemonic counts before F4",
+    )
+    parser.add_argument(
         "--verify-label-blind",
         action="store_true",
         help="run twice, with and without FLIRT, and compare every "
@@ -281,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
             binary, output_dir, case=args.case,
             no_flirt=args.no_flirt, top_k=args.top_k,
             component_budgeted_v1=args.component_budgeted_v1,
+            lazy_nonmatch=args.lazy_nonmatch,
         )
         comparison = None
         if args.verify_label_blind:
@@ -288,6 +302,7 @@ def main(argv: list[str] | None = None) -> int:
                 binary, output_dir.parent / f"{output_dir.name}-no-flirt",
                 case=args.case, no_flirt=not args.no_flirt, top_k=args.top_k,
                 component_budgeted_v1=args.component_budgeted_v1,
+                lazy_nonmatch=args.lazy_nonmatch,
             )
             mine, theirs = manifest["label_blind_sha256"], other["label_blind_sha256"]
             shared = sorted(set(mine) & set(theirs))
